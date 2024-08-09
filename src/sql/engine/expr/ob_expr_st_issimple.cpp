@@ -93,7 +93,7 @@ int ObExprSTIsSimple::eval_st_issimple(const ObExpr &expr, ObEvalCtx &ctx, ObDat
       ObGeoEvalCtx gis_context(&tmp_allocator, srs);
       if (OB_FAIL(gis_context.append_geo_arg(geo))) {
         LOG_WARN("build geo gis context failed", K(ret));
-      } else if (OB_FAIL(ObGeoFunc<ObGeoFuncType::IsValid>::geo_func::eval(gis_context, issimple_res))) {
+      } else if (OB_FAIL(ObGeoFunc<ObGeoFuncType::IsSimple>::geo_func::eval(gis_context, issimple_res))) {
         LOG_WARN("eval geo func isvalid failed", K(ret));
         ObGeoExprUtils::geo_func_error_handle(ret, N_ST_ISSIMPLE);
       } else {
