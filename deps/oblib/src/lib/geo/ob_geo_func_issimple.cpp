@@ -26,8 +26,8 @@ namespace common
 
 template <typename GeoType>
 static int eval_issimple_without_strategy(const ObGeometry *g,
-                                         const ObGeoEvalCtx &context,
-                                         bool &result)
+                                          const ObGeoEvalCtx &context,
+                                          bool &result)
 {
   INIT_SUCC(ret);
   const GeoType *geo = nullptr;
@@ -40,18 +40,34 @@ static int eval_issimple_without_strategy(const ObGeometry *g,
     ret = OB_ERR_NULL_VALUE;
     LOG_WARN("geometry can not be null", K(ret));
   } else {
-    // todo
+    result = bg::is_simple(*geo);
   }
   return ret;
 }
 
 template <typename GeoType>
 static int eval_issimple_with_strategy(const ObGeometry *g,
-                                      const ObGeoEvalCtx &context,
-                                      bool &result)
+                                       const ObGeoEvalCtx &context,
+                                       bool &result)
 {
   INIT_SUCC(ret);
-  
+  const GeoType *geo = nullptr;
+  if (!g->is_tree()) {
+    geo = reinterpret_cast<GeoType *>(const_cast<char *>(g->val()));
+  } else {
+    geo = reinterpret_cast<GeoType *>(const_cast<ObGeometry *>(g));
+  }
+  if (OB_ISNULL(geo)) {
+    ret = OB_ERR_NULL_VALUE;
+    LOG_WARN("geometry can not be null", K(ret));
+  } else {
+    const ObSrsItem *srs = context.get_srs();
+    bg::srs::spheroid<double> geog_sphere(srs->semi_major_axis(), 
+                                          srs->semi_minor_axis());
+    bg::strategy::intersection::geographic_segments<> m_geostrat(geog_sphere);
+
+    result = bg::is_simple(*geo, m_geostrat);
+  }
   return ret;
 }
 
@@ -111,20 +127,56 @@ private:
         if (OB_SUCC(ret)) {
           ret = eval_wkb_unary(sub_g, context, result);
         }
-        // todo
+        // todo: intersecting interior
       }
     }
     return ret;
   }
 };
 
-OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomCollection, bool)
+// Cartesian
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomPoint, bool)
 {
   UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomPoint>(g, context, result);
+} OB_GEO_FUNC_END;
+
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomLineString, bool)
+{
+  UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomLineString>(g, context, result);
+} OB_GEO_FUNC_END;
+
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomPolygon, bool)
+{
+  UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomPolygon>(g, context, result);
+} OB_GEO_FUNC_END;
+
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomCollection, bool)
+{
   return eval_issimple_gc<ObWkbGeomCollection>(g, context, result);
 } OB_GEO_FUNC_END;
 
-// geography
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomMultiPoint, bool)
+{
+  UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomMultiPoint>(g, context, result);
+} OB_GEO_FUNC_END;
+
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomMultiLineString, bool)
+{
+  UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomMultiLineString>(g, context, result);
+} OB_GEO_FUNC_END;
+
+OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeomMultiPolygon, bool)
+{
+  UNUSED(context);
+  return eval_issimple_without_strategy<ObWkbGeomMultiPolygon>(g, context, result);
+} OB_GEO_FUNC_END;
+
+// Geography
 OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeogPoint, bool)
 {
   return eval_issimple_with_strategy<ObWkbGeogPoint>(g, context, result);
@@ -158,17 +210,6 @@ OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeogMultiLineString, bool)
 OB_GEO_UNARY_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObWkbGeogMultiPolygon, bool)
 {
   return eval_issimple_with_strategy<ObWkbGeogMultiPolygon>(g, context, result);
-} OB_GEO_FUNC_END;
-
-OB_GEO_UNARY_TREE_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObCartesianPolygon, bool)
-{
-  return eval_issimple_without_strategy<ObCartesianPolygon>(g, context, result);
-} OB_GEO_FUNC_END;
-
-OB_GEO_UNARY_TREE_FUNC_BEGIN(ObGeoFuncIsSimpleImpl, ObCartesianMultipolygon, bool)
-{
-  UNUSED(context);
-  return eval_issimple_without_strategy<ObCartesianMultipolygon>(g, context, result);
 } OB_GEO_FUNC_END;
 
 int ObGeoFuncIsSimple::eval(const ObGeoEvalCtx &gis_context, bool &result)

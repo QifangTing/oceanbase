@@ -14,7 +14,7 @@
 #define USING_LOG_PREFIX SQL_ENG
 
 #include "lib/geo/ob_geo_func_register.h"
-#include "lib/geo/ob_geo_func_isvalid.h" // todo
+#include "lib/geo/ob_geo_func_issimple.h"
 #include "ob_expr_st_issimple.h"
 #include "lib/geo/ob_srs_info.h"
 #include "observer/omt/ob_tenant_srs.h"
