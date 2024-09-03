@@ -56,6 +56,7 @@ public:
   int transform(ObDMLStmt *&stmt);
   int do_transform(ObDMLStmt *&stmt);
   int do_transform_pre_precessing(ObDMLStmt *&stmt);
+  int do_prepare_mv_rewrite(const ObDMLStmt *stmt);
   int do_transform_dblink_write(ObDMLStmt *&stmt, bool &trans_happened);
   int do_transform_dblink_read(ObDMLStmt *&stmt);
   int transform_heuristic_rule(ObDMLStmt *&stmt);
@@ -152,7 +153,9 @@ public:
   };
   static int check_stmt_functions(const ObDMLStmt *stmt, StmtFunc &func);
   int check_temp_table_functions(ObDMLStmt *stmt, StmtFunc &func);
+  int check_vec_approx(ObDMLStmt *stmt, bool &has_approx);
   inline ObTransformerCtx *get_trans_ctx() { return ctx_; }
+  int set_transformation_parameters(ObQueryCtx *query_ctx);
 private:
 
   int collect_trans_stat(const ObTransformRule &rule);

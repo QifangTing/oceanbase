@@ -39,13 +39,15 @@ const char *const HOST = "host=";
 const char *const APPID = "appid=";
 const char *const DELETE_MODE = "delete_mode=";
 const char *const REGION = "s3_region=";
+const char *const MAX_IOPS = "max_iops=";
+const char *const MAX_BANDWIDTH = "max_bandwidth=";
 
 const char *const CHECKSUM_TYPE = "checksum_type=";
 const char *const CHECKSUM_TYPE_NO_CHECKSUM = "no_checksum";
 const char *const CHECKSUM_TYPE_MD5 = "md5";
 const char *const CHECKSUM_TYPE_CRC32 = "crc32";
 
-enum ObStorageChecksumType
+enum ObStorageChecksumType : uint8_t
 {
   OB_NO_CHECKSUM_ALGO = 0,
   OB_MD5_ALGO = 1,
@@ -76,23 +78,31 @@ public:
   ObStorageChecksumType get_checksum_type() const;
   const char *get_checksum_type_str() const;
   virtual int get_storage_info_str(char *storage_info, const int64_t info_len) const;
+  // the following two functions are designed for ObDeviceManager, which manages all devices by a device_map_
+  int get_device_map_key_str(char *key_str, const int64_t len) const;
+  int64_t get_device_map_key_len() const;
+  int get_delete_mode() const { return delete_mode_; }
 
   virtual bool is_valid() const;
   virtual void reset();
   int64_t hash() const;
   bool operator ==(const ObObjectStorageInfo &storage_info) const;
   bool operator !=(const ObObjectStorageInfo &storage_info) const;
-  TO_STRING_KV(K_(endpoint), K_(access_id), K_(extension),
-               "type", get_type_str(), K_(checksum_type));
+  bool is_access_info_equal(const ObObjectStorageInfo &storage_info) const;
+  int reset_access_id_and_access_key(
+      const char *access_id, const char *access_key);
+  TO_STRING_KV(K_(endpoint), K_(access_id), K_(extension), "type", get_type_str(),
+      K_(checksum_type), K_(max_iops), K_(max_bandwidth));
 
 protected:
   virtual int get_access_key_(char *key_buf, const int64_t key_buf_len) const;
   virtual int parse_storage_info_(const char *storage_info, bool &has_appid);
-  int check_delete_mode_(const char *delete_mode) const;
+  int check_delete_mode_(const char *delete_mode);
   int set_checksum_type_(const char *checksum_type_str);
   int set_storage_info_field_(const char *info, char *field, const int64_t length);
 
 public:
+  int delete_mode_;
   // TODO: Rename device_type_ to storage_protocol_type_ for better clarity
   // Prefix in the storage_info string, such as 's3://', indicates the protocol used to access the target
   // Currently, both OBS and GCS are accessed via the s3 protocol,
@@ -107,6 +117,8 @@ public:
   char access_id_[OB_MAX_BACKUP_ACCESSID_LENGTH];
   char access_key_[OB_MAX_BACKUP_ACCESSKEY_LENGTH];
   char extension_[OB_MAX_BACKUP_EXTENSION_LENGTH];
+  int64_t max_iops_;
+  int64_t max_bandwidth_;
 };
 
 }

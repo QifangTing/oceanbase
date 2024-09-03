@@ -22,6 +22,7 @@
 #include "share/ob_autoincrement_service.h"
 #include "share/ob_cluster_version.h"
 #include "share/ob_fts_index_builder_util.h"
+#include "share/ob_vec_index_builder_util.h"
 #include "share/resource_manager/ob_resource_manager_proxy.h"
 #include "share/schema/ob_schema_service.h"
 #include "share/schema/ob_schema_getter_guard.h"
@@ -81,6 +82,7 @@
 #include "share/schema/ob_mview_refresh_stats_params.h"
 #include "storage/mview/ob_mview_sched_job_utils.h"
 #include "pl/ob_pl_persistent.h"
+#include "pl/pl_cache/ob_pl_cache_mgr.h"
 
 namespace oceanbase
 {
@@ -699,7 +701,6 @@ int ObDDLOperator::drop_database(const ObDatabaseSchema &db_schema,
   const uint64_t tenant_id = db_schema.get_tenant_id();
   const uint64_t database_id = db_schema.get_database_id();
   int64_t new_schema_version = OB_INVALID_VERSION;
-
   if (OB_ISNULL(schema_service_impl)) {
     ret = OB_ERR_SYS;
     LOG_ERROR("schama service_impl and schema manage must not null",
@@ -842,7 +843,7 @@ int ObDDLOperator::drop_database(const ObDatabaseSchema &db_schema,
       LOG_WARN("failed to get schema guard", KR(ret), K(tenant_id));
     } else if (OB_FAIL(schema_guard.get_simple_package_schemas_in_database(tenant_id, database_id, package_schemas))) {
        LOG_WARN("get packages in database failed", K(tenant_id), KT(database_id), K(ret));
-     } else {
+    } else {
        ObArray<const ObSAuditSchema *> audits;
        common::ObSqlString public_sql_string;
        for (int64_t i = 0; OB_SUCC(ret) && i < package_schemas.count(); ++i) {
@@ -998,27 +999,31 @@ int ObDDLOperator::drop_database(const ObDatabaseSchema &db_schema,
           LOG_WARN("drop routine failed", "routine_id", udt_info->get_type_id(), K(ret));
         }
         if (OB_SUCC(ret)) {
+          uint64_t udt_db_id = udt_info->get_database_id();
           if (udt_info->is_object_spec_ddl() &&
               OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info->get_object_spec_id(tenant_id))) {
-            OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                          ObUDTObjectType::mask_object_id(udt_info->get_object_spec_id(tenant_id)),
-                          udt_info->get_database_id()));
+            uint64_t udt_spec_id = ObUDTObjectType::mask_object_id(udt_info->get_object_spec_id(tenant_id));
+            OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, udt_spec_id, udt_db_id));
             if (udt_info->has_type_body() &&
                 OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id))) {
-              OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                            ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id)),
-                            udt_info->get_database_id()));
+              uint64_t udt_body_id = ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id));
+              OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, udt_body_id, udt_db_id));
             }
           } else if (udt_info->is_object_body_ddl() &&
                     OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id))) {
-            OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                                      ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id)),
-                                      udt_info->get_database_id()));
+            uint64_t udt_body_id = ObUDTObjectType::mask_object_id(udt_info->get_object_body_id(tenant_id));
+            OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, udt_body_id, udt_db_id));
+            if (OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info->get_object_spec_id(tenant_id))) {
+              uint64_t udt_spec_id = ObUDTObjectType::mask_object_id(udt_info->get_object_spec_id(tenant_id));
+              OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, udt_spec_id, udt_db_id));
+            }
           }
         }
       }
     }
   }
+  // flush pl cache
+  OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(OB_INVALID_ID, database_id, tenant_id, schema_service_));
 
   // delete sequences in database
   if (OB_SUCC(ret)) {
@@ -1815,7 +1820,9 @@ int ObDDLOperator::create_sequence_in_create_table(ObTableSchema &table_schema,
                 orig_default_value.set_collation_type(ObCharset::get_system_collation());
                 orig_default_value.set_collation_level(CS_LEVEL_IMPLICIT);
                 orig_default_value.set_param_meta();
-                if (OB_FAIL(column_schema.set_cur_default_value(cur_default_value))) {
+                if (OB_FAIL(column_schema.set_cur_default_value(
+                        cur_default_value,
+                        column_schema.is_default_expr_v2_column()))) {
                   LOG_WARN("set current default value fail", K(ret));
                 } else if (OB_FAIL(column_schema.set_orig_default_value(orig_default_value))) {
                   LOG_WARN("set origin default value fail", K(ret), K(column_schema));
@@ -1898,7 +1905,9 @@ int ObDDLOperator::create_sequence_in_add_column(const ObTableSchema &table_sche
           orig_default_value.set_collation_type(ObCharset::get_system_collation());
           orig_default_value.set_collation_level(CS_LEVEL_IMPLICIT);
           orig_default_value.set_param_meta();
-          if (OB_FAIL(column_schema.set_cur_default_value(cur_default_value))) {
+          if (OB_FAIL(column_schema.set_cur_default_value(
+                  cur_default_value,
+                  column_schema.is_default_expr_v2_column()))) {
             LOG_WARN("set current default value fail", K(ret));
           } else if (OB_FAIL(column_schema.set_orig_default_value(orig_default_value))) {
             LOG_WARN("set origin default value fail", K(ret), K(column_schema));
@@ -3590,16 +3599,43 @@ int ObDDLOperator::alter_table_rename_index(
         LOG_WARN("fail to alter table rename index", K(ret), K(tenant_id), KPC(index_table_schema),
             K(new_index_table_name));
       } else if (is_fts_index_aux(index_table_schema->get_index_type())) {
-        if (OB_FAIL(alter_table_rename_built_in_fts_index_(tenant_id,
-                                                           data_table_id,
-                                                           database_id,
-                                                           index_name,
-                                                           new_index_name,
-                                                           new_index_status,
-                                                           schema_guard,
-                                                           trans,
-                                                           allocator))) {
+        if (OB_FAIL(alter_table_rename_built_in_index_(tenant_id,
+                                                       data_table_id,
+                                                       database_id,
+                                                       INDEX_TYPE_FTS_DOC_WORD_LOCAL, /* index_type */
+                                                       index_name,
+                                                       new_index_name,
+                                                       new_index_status,
+                                                       schema_guard,
+                                                       trans,
+                                                       allocator))) {
           LOG_WARN("failed to rename built in fts index", K(ret), K(tenant_id),
+              K(data_table_id), K(database_id), K(index_name), K(new_index_name));
+        }
+      } else if (is_vec_delta_buffer_type(index_table_schema->get_index_type())) {
+        if (OB_FAIL(alter_table_rename_built_in_index_(tenant_id,
+                                                       data_table_id,
+                                                       database_id,
+                                                       INDEX_TYPE_VEC_INDEX_ID_LOCAL, /* index_type */
+                                                       index_name,
+                                                       new_index_name,
+                                                       new_index_status,
+                                                       schema_guard,
+                                                       trans,
+                                                       allocator))) {
+          LOG_WARN("failed to rename built in delta_buffer_table index", K(ret), K(tenant_id),
+              K(data_table_id), K(database_id), K(index_name), K(new_index_name));
+        } else if (OB_FAIL(alter_table_rename_built_in_index_(tenant_id,
+                                                       data_table_id,
+                                                       database_id,
+                                                       INDEX_TYPE_VEC_INDEX_SNAPSHOT_DATA_LOCAL, /* index_type */
+                                                       index_name,
+                                                       new_index_name,
+                                                       new_index_status,
+                                                       schema_guard,
+                                                       trans,
+                                                       allocator))) {
+          LOG_WARN("failed to rename built in index_snapshot_data_table index", K(ret), K(tenant_id),
               K(data_table_id), K(database_id), K(index_name), K(new_index_name));
         }
       }
@@ -3608,10 +3644,11 @@ int ObDDLOperator::alter_table_rename_index(
   return ret;
 }
 
-int ObDDLOperator::alter_table_rename_built_in_fts_index_(
+int ObDDLOperator::alter_table_rename_built_in_index_(
     const uint64_t tenant_id,
     const uint64_t data_table_id,
     const uint64_t database_id,
+    const ObIndexType index_type,
     const ObString &index_name,
     const ObString &new_index_name,
     const ObIndexStatus *new_index_status,
@@ -3620,49 +3657,65 @@ int ObDDLOperator::alter_table_rename_built_in_fts_index_(
     ObArenaAllocator &allocator)
 {
   int ret = OB_SUCCESS;
-  SMART_VARS_3((ObTableSchema, new_fts_doc_word_schema),
+  SMART_VARS_3((ObTableSchema, new_table_schema),
                (obrpc::ObCreateIndexArg, origin_index_arg),
                (obrpc::ObCreateIndexArg, new_index_arg)) {
-    const ObTableSchema *origin_fts_doc_word_schema = NULL;
+    const ObTableSchema *origin_table_schema = NULL;
     origin_index_arg.index_name_ = index_name;
-    origin_index_arg.index_type_ = INDEX_TYPE_FTS_DOC_WORD_LOCAL;
+    origin_index_arg.index_type_ = index_type;
     new_index_arg.index_name_ = new_index_name;
-    new_index_arg.index_type_ = INDEX_TYPE_FTS_DOC_WORD_LOCAL;
-    ObString origin_fts_doc_word_index_table_name;
-    ObString new_fts_doc_word_index_table_name;
-    if (OB_FAIL(ObFtsIndexBuilderUtil::generate_fts_aux_index_name(origin_index_arg, &allocator))) {
-      LOG_WARN("failed to generate origin fts doc word name", K(ret));
-    } else if (OB_FAIL(ObFtsIndexBuilderUtil::generate_fts_aux_index_name(new_index_arg, &allocator))) {
-      LOG_WARN("failed to generate new fts doc word name", K(ret));
+    new_index_arg.index_type_ = index_type;
+    ObString origin_index_table_name;
+    ObString new_index_table_name;
+    if (is_fts_index(index_type)) { // fts index
+      if (OB_FAIL(ObFtsIndexBuilderUtil::generate_fts_aux_index_name(origin_index_arg, &allocator))) {
+        LOG_WARN("failed to generate origin fts doc word name", K(ret), K(index_type));
+      } else if (OB_FAIL(ObFtsIndexBuilderUtil::generate_fts_aux_index_name(new_index_arg, &allocator))) {
+        LOG_WARN("failed to generate new fts doc word name", K(ret), K(index_type));
+      }
+    } else if (is_vec_index(index_type)) {  // vector index
+      if (OB_FAIL(ObVecIndexBuilderUtil::generate_vec_index_name(&allocator,
+                                                                 index_type,
+                                                                 index_name,
+                                                                 origin_index_arg.index_name_))) {
+        LOG_WARN("failed to generate origin vec index name", K(ret), K(index_type));
+      } else if (OB_FAIL(ObVecIndexBuilderUtil::generate_vec_index_name(&allocator,
+                                                                        index_type,
+                                                                        new_index_name,
+                                                                        new_index_arg.index_name_))) {
+        LOG_WARN("failed to generate new vec index name", K(ret), K(index_type));
+      }
+    } else {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("unexpected index type", K(ret), K(index_type));
+    }
+
+    if (OB_FAIL(ret)) {
     } else if (OB_FAIL(ObTableSchema::build_index_table_name(allocator,
                                                              data_table_id,
                                                              origin_index_arg.index_name_,
-                                                             origin_fts_doc_word_index_table_name))) {
-      LOG_WARN("failed to build origin fts doc word table name", K(ret),
-          K(data_table_id), K(origin_index_arg.index_name_));
+                                                             origin_index_table_name))) {
+      LOG_WARN("failed to build origin table name", K(ret), K(data_table_id), K(origin_index_arg.index_name_));
     } else if (OB_FAIL(ObTableSchema::build_index_table_name(allocator,
                                                              data_table_id,
                                                              new_index_arg.index_name_,
-                                                             new_fts_doc_word_index_table_name))) {
-      LOG_WARN("failed to build new fts doc word table name", K(ret),
-          K(data_table_id), K(new_index_arg.index_name_));
+                                                             new_index_table_name))) {
+      LOG_WARN("failed to build new table name", K(ret), K(data_table_id), K(new_index_arg.index_name_));
     } else if (OB_FAIL(schema_guard.get_table_schema(tenant_id,
                                                      database_id,
-                                                     origin_fts_doc_word_index_table_name,
+                                                     origin_index_table_name,
                                                      true/*is_index*/,
-                                                     origin_fts_doc_word_schema,
+                                                     origin_table_schema,
                                                      false/*is_hidden*/,
                                                      true/*is_built_in_index*/))) {
       LOG_WARN("failed to get origin fts_doc_word schema", K(ret));
     } else if (OB_FAIL(inner_alter_table_rename_index_(tenant_id,
-                                                       origin_fts_doc_word_schema,
-                                                       new_fts_doc_word_index_table_name,
+                                                       origin_table_schema,
+                                                       new_index_table_name,
                                                        new_index_status,
                                                        trans,
-                                                       new_fts_doc_word_schema))) {
-      LOG_WARN("fail to alter table rename fts doc word index",
-          K(ret), K(tenant_id), KPC(origin_fts_doc_word_schema),
-          K(new_fts_doc_word_schema));
+                                                       new_table_schema))) {
+      LOG_WARN("fail to alter table rename index", K(ret), K(tenant_id), KPC(origin_table_schema), K(new_table_schema));
     }
   }
   return ret;
@@ -5699,6 +5752,10 @@ int ObDDLOperator::init_tenant_env(
     LOG_WARN("insert default tablegroup failed", K(tenant_id), K(ret));
   } else if (OB_FAIL(init_tenant_databases(tenant_schema, sys_variable, trans))) {
     LOG_WARN("insert default databases failed,", K(tenant_id), K(ret));
+  } else if (OB_FAIL(init_tenant_optimizer_stats_info(sys_variable, tenant_id, trans))) {
+    LOG_WARN("failed to init tenant optimizer stats info", K(tenant_id), K(ret));
+  } else if (OB_FAIL(init_tenant_spm_configure(tenant_id, trans))) {
+    LOG_WARN("failed to init tenant spm configure", K(tenant_id), K(ret));
   } else if (OB_FAIL(init_tenant_profile(tenant_id, sys_variable, trans))) {
     LOG_WARN("fail to init tenant profile", K(tenant_id), K(ret));
   } else if (OB_FAIL(init_tenant_users(tenant_schema, sys_variable, trans))) {
@@ -5891,10 +5948,6 @@ int ObDDLOperator::init_tenant_databases(const ObTenantSchema &tenant_schema,
                                           OB_PUBLIC_SCHEMA_ID, "public schema",
                                           trans, is_oracle_mode))) {
     RS_LOG(WARN, "insert public schema failed", K(tenant_id), K(ret));
-  } else if (OB_FAIL(init_tenant_optimizer_stats_info(sys_variable, tenant_id, trans))) {
-    RS_LOG(WARN, "init tenant tenant optimizer control table", K(tenant_id), K(ret));
-  } else if (OB_FAIL(init_tenant_spm_configure(tenant_id, trans))) {
-    RS_LOG(WARN, "init tenant spm configure failed", K(tenant_id), K(ret));
   } else {
     if (!is_oracle_mode) {
       if (OB_FAIL(init_tenant_database(tenant_schema, mysql_schema,
@@ -6966,7 +7019,8 @@ int ObDDLOperator::drop_db_table_privs(
         } else if (OB_FAIL(schema_service_.gen_new_schema_version(tenant_id, new_schema_version))) {
           LOG_WARN("fail to gen new schema_version", K(ret), K(tenant_id));
         } else if (OB_FAIL(schema_sql_service->get_priv_sql_service().grant_routine(
-            routine_priv->get_sort_key(), empty_priv, new_schema_version, &dcl_stmt, trans, 0, false))) {
+            routine_priv->get_sort_key(), empty_priv, new_schema_version, &dcl_stmt, trans,
+            0, false, "", ""))) {
           LOG_WARN("Delete table privilege failed", K(routine_priv), K(ret));
         }
       }
@@ -7690,7 +7744,9 @@ int ObDDLOperator::grant_table(
     common::ObMySQLTransaction &trans,
     const share::ObRawObjPrivArray &obj_priv_array,
     const uint64_t option,
-    const share::schema::ObObjPrivSortKey &obj_priv_key)
+    const share::schema::ObObjPrivSortKey &obj_priv_key,
+    const common::ObString &grantor,
+    const common::ObString &grantor_host)
 {
   int ret = OB_SUCCESS;
   ObRawObjPrivArray new_obj_priv_array;
@@ -7737,8 +7793,8 @@ int ObDDLOperator::grant_table(
         }
         OZ (schema_sql_service->get_priv_sql_service().grant_table(
             table_priv_key, new_priv, new_schema_version, ddl_stmt_str, trans,
-            new_obj_priv_array, option, obj_priv_key, new_schema_version_ora, true, false),
-            table_priv_key, ret, false);
+            new_obj_priv_array, option, obj_priv_key, new_schema_version_ora, true, false,
+            grantor, grantor_host), table_priv_key, ret, false);
       } else if (obj_priv_array.count() > 0) {
         OZ (set_need_flush_ora(schema_guard, obj_priv_key, option, obj_priv_array,
           new_obj_priv_array));
@@ -7761,7 +7817,9 @@ int ObDDLOperator::grant_routine(
     const ObPrivSet priv_set,
     common::ObMySQLTransaction &trans,
     const uint64_t option,
-    const bool gen_ddl_stmt)
+    const bool gen_ddl_stmt,
+    const common::ObString &grantor,
+    const common::ObString &grantor_host)
 {
   int ret = OB_SUCCESS;
   ObRawObjPrivArray new_obj_priv_array;
@@ -7815,7 +7873,8 @@ int ObDDLOperator::grant_routine(
           if (OB_FAIL(schema_service_.gen_new_schema_version(tenant_id, new_schema_version))) {
             LOG_WARN("fail to gen new schema_version", K(ret), K(tenant_id));
           } else if (OB_FAIL(schema_sql_service->get_priv_sql_service().grant_routine(
-                routine_priv_key, new_priv, new_schema_version, &ddl_sql, trans, option, true))) {
+                routine_priv_key, new_priv, new_schema_version, &ddl_sql, trans, option, true,
+                grantor, grantor_host))) {
             LOG_WARN("priv sql service grant routine failed", K(ret));
           }
         }
@@ -8170,13 +8229,16 @@ int ObDDLOperator::revoke_table(
     common::ObMySQLTransaction &trans,
     const ObObjPrivSortKey &obj_priv_key,
     const share::ObRawObjPrivArray &obj_priv_array,
-    const bool revoke_all_ora)
+    const bool revoke_all_ora,
+    const common::ObString &grantor,
+    const common::ObString &grantor_host)
 {
   int ret = OB_SUCCESS;
   const uint64_t tenant_id = table_priv_key.tenant_id_;
   ObSchemaGetterGuard schema_guard;
   ObSchemaService *schema_sql_service = schema_service_.get_schema_service();
   bool is_oracle_mode = false;
+  uint64_t compat_version = 0;
   if (OB_ISNULL(schema_sql_service)) {
     ret = OB_ERR_SYS;
     LOG_ERROR("schama service_impl and schema manage must not null",
@@ -8188,7 +8250,15 @@ int ObDDLOperator::revoke_table(
   } else if (OB_FAIL(schema_service_.get_tenant_schema_guard(tenant_id, schema_guard))) {
     LOG_WARN("failed to get schema guard", K(ret));
   } else if (OB_FAIL(ObCompatModeGetter::check_is_oracle_mode_with_tenant_id(tenant_id, is_oracle_mode))) {
-    LOG_WARN("fail to get compat mode", K(ret));
+    LOG_WARN("fail to check is oracle mode", K(ret));
+  } else if (OB_FAIL(GET_MIN_DATA_VERSION(tenant_id, compat_version))) {
+    LOG_WARN("fail to get data version", K(ret), K(tenant_id));
+  } else if (!ObSQLUtils::is_data_version_ge_424_or_433(compat_version)
+             && !is_oracle_mode && 0 != (priv_set & OB_PRIV_REFERENCES)) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_WARN("revoke references not supported when MIN_DATA_VERSION is below DATA_VERSION_4_2_4_0 or DATA_VERSION_4_3_3_0",
+             K(ret), K(priv_set), K(compat_version));
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "revoke references");
   } else {
     ObPrivSet table_priv_set = OB_PRIV_SET_EMPTY;
     if (OB_FAIL(schema_guard.get_table_priv_set(table_priv_key, table_priv_set))) {
@@ -8259,7 +8329,8 @@ int ObDDLOperator::revoke_table(
           LOG_WARN("fail to gen new schema_version", K(ret), K(tenant_id));
         } else if (OB_FAIL(schema_sql_service->get_priv_sql_service().revoke_table(
             table_priv_key, new_priv, new_schema_version, &ddl_sql, trans,
-            new_schema_version_ora, obj_priv_key, obj_priv_array, is_all))) {
+            new_schema_version_ora, obj_priv_key, obj_priv_array, is_all,
+            grantor, grantor_host))) {
           LOG_WARN("Failed to revoke table", K(table_priv_key), K(ret));
         } else {
           OZ (revoke_obj_cascade(schema_guard, obj_priv_key.grantee_id_,
@@ -8331,7 +8402,9 @@ int ObDDLOperator::revoke_routine(
     const ObPrivSet priv_set,
     common::ObMySQLTransaction &trans,
     bool report_error,
-    const bool gen_ddl_stmt)
+    const bool gen_ddl_stmt,
+    const common::ObString &grantor,
+    const common::ObString &grantor_host)
 {
   int ret = OB_SUCCESS;
   const uint64_t tenant_id = routine_priv_key.tenant_id_;
@@ -8394,7 +8467,7 @@ int ObDDLOperator::revoke_routine(
                            new_schema_version))) {
           LOG_WARN("fail to gen new schema_version", K(ret), K(tenant_id));
         } else if (OB_FAIL(schema_sql_service->get_priv_sql_service().revoke_routine(
-            routine_priv_key, new_priv, new_schema_version, &ddl_sql, trans))) {
+            routine_priv_key, new_priv, new_schema_version, &ddl_sql, trans, grantor, grantor_host))) {
           LOG_WARN("Failed to revoke routine", K(routine_priv_key), K(ret));
         }
       }
@@ -9113,6 +9186,9 @@ int ObDDLOperator::drop_routine(const ObRoutineInfo &routine_info,
                      routine_info, new_schema_version, trans, ddl_stmt_str))) {
     LOG_WARN("drop routine info failed", K(routine_info), K(ret));
   }
+  uint64_t rt_id = routine_info.get_routine_id();
+  uint64_t db_id = routine_info.get_database_id();
+  OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(rt_id, db_id, tenant_id, schema_service_));
   OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, routine_info.get_tenant_id(),
                             routine_info.get_routine_id(), routine_info.get_database_id()));
   OZ (ObDependencyInfo::delete_schema_object_dependency(trans, routine_info.get_tenant_id(),
@@ -9480,6 +9556,8 @@ int ObDDLOperator::drop_package(const ObPackageInfo &package_info,
                                                         package_info.get_package_id(),
                                                         new_schema_version,
                                                         package_info.get_object_type()));
+        OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(package_info.get_package_id(), package_info.get_database_id(), tenant_id,
+                                                              schema_service_));
         OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, package_info.get_package_id(),
                                                               package_info.get_database_id()));
         if (OB_NOT_NULL(package_body_info)) {
@@ -9487,11 +9565,15 @@ int ObDDLOperator::drop_package(const ObPackageInfo &package_info,
                                                         package_body_info->get_package_id(),
                                                         new_schema_version,
                                                         package_body_info->get_object_type()));
+          OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(package_body_info->get_package_id(), package_body_info->get_database_id(),
+                                                                tenant_id, schema_service_));
           OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, package_body_info->get_package_id(),
                                                                 package_body_info->get_database_id()));
         }
       }
     } else {
+      OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(package_info.get_package_id(), package_info.get_database_id(), tenant_id,
+                                                            schema_service_));
       OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id, package_info.get_package_id(),
                                                             package_info.get_database_id()));
     }
@@ -9675,9 +9757,13 @@ int ObDDLOperator::drop_trigger(const ObTriggerInfo &trigger_info,
                                                         trigger_info.get_trigger_id(),
                                                         new_schema_version,
                                                         trigger_info.get_object_type()));
+  uint64_t spec_trig_id = share::schema::ObTriggerInfo::get_trigger_spec_package_id(trigger_info.get_trigger_id());
+  uint64_t body_trig_id = share::schema::ObTriggerInfo::get_trigger_body_package_id(trigger_info.get_trigger_id());
+  OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(spec_trig_id, trigger_info.get_database_id(), tenant_id, schema_service_));
   OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
                 share::schema::ObTriggerInfo::get_trigger_spec_package_id(trigger_info.get_trigger_id()),
                 trigger_info.get_database_id()));
+  OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(body_trig_id, trigger_info.get_database_id(), tenant_id, schema_service_));
   OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
                 share::schema::ObTriggerInfo::get_trigger_body_package_id(trigger_info.get_trigger_id()),
                 trigger_info.get_database_id()));
@@ -10198,21 +10284,27 @@ int ObDDLOperator::drop_udt(const ObUDTTypeInfo &udt_info,
     LOG_WARN("drop udt info failed", K(udt_info), K(ret));
   }
   if (OB_SUCC(ret)) {
+    uint64_t spec_udt_id = ObUDTObjectType::mask_object_id(udt_info.get_object_spec_id(tenant_id));
     if (udt_info.is_object_spec_ddl() &&
-        OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info.get_object_spec_id(tenant_id))) {
+        OB_INVALID_ID != spec_udt_id) {
+      OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(spec_udt_id, udt_info.get_database_id(), tenant_id, schema_service_));
       OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                    ObUDTObjectType::mask_object_id(udt_info.get_object_spec_id(tenant_id)),
+                    spec_udt_id,
                     udt_info.get_database_id()));
       if (udt_info.has_type_body() &&
           OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id))) {
+        uint64_t body_udt_id = ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id));
+        OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(body_udt_id, udt_info.get_database_id(), tenant_id, schema_service_));
         OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                      ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id)),
+                      body_udt_id,
                       udt_info.get_database_id()));
       }
     } else if (udt_info.is_object_body_ddl() &&
                OB_INVALID_ID != ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id))) {
+      uint64_t body_udt_id = ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id));
+      OZ (pl::ObPLCacheMgr::flush_pl_cache_by_sql(body_udt_id, udt_info.get_database_id(), tenant_id, schema_service_));
       OZ (pl::ObRoutinePersistentInfo::delete_dll_from_disk(trans, tenant_id,
-                    ObUDTObjectType::mask_object_id(udt_info.get_object_body_id(tenant_id)),
+                    body_udt_id,
                     udt_info.get_database_id()));
     }
   }

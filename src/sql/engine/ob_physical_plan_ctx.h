@@ -506,10 +506,15 @@ public:
   bool is_rich_format() const { return enable_rich_format_; }
 
   int get_sqludt_meta_by_subschema_id(uint16_t subschema_id, ObSqlUDTMeta &udt_meta);
+  int get_sqludt_meta_by_subschema_id(uint16_t subschema_id, ObSubSchemaValue &sub_meta);
   bool is_subschema_ctx_inited();
   int get_subschema_id_by_udt_id(uint64_t udt_type_id,
                                  uint16_t &subschema_id,
                                  share::schema::ObSchemaGetterGuard *schema_guard = NULL);
+  int get_subschema_id_by_collection_elem_type(ObNestedType coll_type,
+                                               const ObDataType &elem_type,
+                                               uint16_t &subschema_id);
+  int get_subschema_id_by_type_string(const ObString &type_string, uint16_t &subschema_id);
   int build_subschema_by_fields(const ColumnsFieldIArray *fields,
                                 share::schema::ObSchemaGetterGuard *schema_guard);
   int build_subschema_ctx_by_param_store(share::schema::ObSchemaGetterGuard *schema_guard);
@@ -689,6 +694,7 @@ private:
   int64_t total_memstore_read_row_count_;
   int64_t total_ssstore_read_row_count_;
   bool is_direct_insert_plan_; // for direct load: insert into/overwrite select
+  bool check_pdml_affected_rows_; // now only worked for pdml checking affected_rows
 };
 
 }

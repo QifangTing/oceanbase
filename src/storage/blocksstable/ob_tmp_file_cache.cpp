@@ -15,10 +15,15 @@
 #include "common/ob_smart_var.h"
 #include "storage/ob_file_system_router.h"
 #include "share/ob_task_define.h"
+#include "share/ob_io_device_helper.h"
 #include "ob_tmp_file_cache.h"
 #include "ob_tmp_file.h"
 #include "ob_tmp_file_store.h"
 #include "ob_block_manager.h"
+#include "storage/blocksstable/ob_storage_object_handle.h"
+#include "storage/blocksstable/ob_storage_object_rw_info.h"
+#include "storage/blocksstable/ob_ss_tmp_file_manager.h"
+#include "observer/ob_server_struct.h"
 
 using namespace oceanbase::storage;
 using namespace oceanbase::share;
@@ -37,6 +42,27 @@ ObTmpPageCacheKey::ObTmpPageCacheKey(const int64_t block_id, const int64_t page_
     const uint64_t tenant_id)
   : block_id_(block_id), page_id_(page_id), tenant_id_(tenant_id)
 {
+}
+
+ObTmpPageCacheKey::ObTmpPageCacheKey(const int64_t tmp_file_id,
+                                     const uint64_t unfilled_page_length,
+                                     const uint64_t logic_page_id,
+                                     const uint64_t tenant_id)
+{
+  int ret = OB_SUCCESS;
+  // Validate Check.
+  if (OB_UNLIKELY(
+          tmp_file_id <= 0 || unfilled_page_length >= PAGE_CACHE_KEY_PAGE_LENGTH_MAX ||
+          logic_page_id >= PAGE_CACHE_KET_LOGIC_PAGE_ID_MAX || tenant_id <= 0)) {
+    ret = OB_ERR_UNEXPECTED;
+    STORAGE_LOG(ERROR, "unexpected tmp page cache key", K(ret), K(tmp_file_id),
+                K(unfilled_page_length), K(logic_page_id), K(tenant_id));
+  } else {
+    tmp_file_id_ = tmp_file_id;
+    unfilled_page_length_ = unfilled_page_length;
+    logic_page_id_ = logic_page_id;
+    tenant_id_ = tenant_id;
+  }
 }
 
 ObTmpPageCacheKey::~ObTmpPageCacheKey()
@@ -121,16 +147,16 @@ int ObTmpPageCacheValue::deep_copy(char *buf, const int64_t buf_len, ObIKVCacheV
 
 int ObTmpPageCache::inner_read_io(const ObTmpBlockIOInfo &io_info,
                                   ObITmpPageIOCallback *callback,
-                                  ObMacroBlockHandle &macro_block_handle)
+                                  ObStorageObjectHandle &object_handle)
 {
   int ret = OB_SUCCESS;
-  if (OB_FAIL(read_io(io_info, callback, macro_block_handle))) {
-    if (macro_block_handle.get_io_handle().is_empty()) {
+  if (OB_FAIL(read_io(io_info, callback, object_handle))) {
+    if (object_handle.get_io_handle().is_empty()) {
       // TODO: After the continuous IO has been optimized, this should
       // not happen.
-      if (OB_FAIL(macro_block_handle.wait())) {
+      if (OB_FAIL(object_handle.wait())) {
         STORAGE_LOG(WARN, "fail to wait tmp page io", K(ret), KP(callback));
-      } else if (OB_FAIL(read_io(io_info, callback, macro_block_handle))) {
+      } else if (OB_FAIL(read_io(io_info, callback, object_handle))) {
         STORAGE_LOG(WARN, "fail to read tmp page from io", K(ret), KP(callback));
       }
     } else {
@@ -147,7 +173,7 @@ int ObTmpPageCache::inner_read_io(const ObTmpBlockIOInfo &io_info,
 }
 
 int ObTmpPageCache::direct_read(const ObTmpBlockIOInfo &info,
-                                ObMacroBlockHandle &mb_handle,
+                                ObStorageObjectHandle &object_handle,
                                 common::ObIAllocator &allocator)
 {
   int ret = OB_SUCCESS;
@@ -162,8 +188,8 @@ int ObTmpPageCache::direct_read(const ObTmpBlockIOInfo &info,
     callback->cache_ = this;
     callback->offset_ = info.offset_;
     callback->allocator_ = &allocator;
-    if (OB_FAIL(inner_read_io(info, callback, mb_handle))) {
-      STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(mb_handle));
+    if (OB_FAIL(inner_read_io(info, callback, object_handle))) {
+      STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(object_handle));
     }
     // There is no need to handle error cases (freeing the memory of the
     // callback) because inner_read_io will handle error cases and free the
@@ -175,7 +201,7 @@ int ObTmpPageCache::direct_read(const ObTmpBlockIOInfo &info,
 int ObTmpPageCache::prefetch(
     const ObTmpPageCacheKey &key,
     const ObTmpBlockIOInfo &info,
-    ObMacroBlockHandle &mb_handle,
+    ObStorageObjectHandle &object_handle,
     common::ObIAllocator &allocator)
 {
   int ret = OB_SUCCESS;
@@ -195,8 +221,8 @@ int ObTmpPageCache::prefetch(
       callback->offset_ = info.offset_;
       callback->allocator_ = &allocator;
       callback->key_ = key;
-      if (OB_FAIL(inner_read_io(info, callback, mb_handle))) {
-        STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(mb_handle));
+      if (OB_FAIL(inner_read_io(info, callback, object_handle))) {
+        STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(object_handle));
       }
       // There is no need to handle error cases (freeing the memory of the
       // callback) because inner_read_io will handle error cases and free the
@@ -209,7 +235,7 @@ int ObTmpPageCache::prefetch(
 int ObTmpPageCache::prefetch(
     const ObTmpBlockIOInfo &info,
     const common::ObIArray<ObTmpPageIOInfo> &page_io_infos,
-    ObMacroBlockHandle &mb_handle,
+    ObStorageObjectHandle &object_handle,
     common::ObIAllocator &allocator)
 {
   int ret = OB_SUCCESS;
@@ -234,8 +260,8 @@ int ObTmpPageCache::prefetch(
           allocator.free(callback);
           callback = nullptr;
         }
-      } else if (OB_FAIL(inner_read_io(info, callback, mb_handle))) {
-        STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(mb_handle));
+      } else if (OB_FAIL(inner_read_io(info, callback, object_handle))) {
+        STORAGE_LOG(WARN, "fail to inner read io", K(ret), K(object_handle));
       }
       // inner_read_io will handle error cases and free the memory of callback.
     }
@@ -270,8 +296,8 @@ int ObTmpPageCache::get_cache_page(const ObTmpPageCacheKey &key, ObTmpPageValueH
   return ret;
 }
 
-ObTmpPageCache::ObITmpPageIOCallback::ObITmpPageIOCallback()
-  : cache_(NULL), allocator_(NULL), offset_(0), data_buf_(NULL)
+ObTmpPageCache::ObITmpPageIOCallback::ObITmpPageIOCallback(const common::ObIOCallbackType type)
+  : common::ObIOCallback(type), cache_(NULL), allocator_(NULL), offset_(0), data_buf_(NULL)
 {
   static_assert(sizeof(*this) <= CALLBACK_BUF_SIZE, "IOCallback buf size not enough");
 }
@@ -305,7 +331,7 @@ int ObTmpPageCache::ObITmpPageIOCallback::process_page(
 }
 
 ObTmpPageCache::ObTmpPageIOCallback::ObTmpPageIOCallback()
-  : key_()
+  : ObITmpPageIOCallback(common::ObIOCallbackType::TMP_PAGE_CALLBACK), key_()
 {
   static_assert(sizeof(*this) <= CALLBACK_BUF_SIZE, "IOCallback buf size not enough");
 }
@@ -353,7 +379,7 @@ const char *ObTmpPageCache::ObTmpPageIOCallback::get_data()
 }
 
 ObTmpPageCache::ObTmpMultiPageIOCallback::ObTmpMultiPageIOCallback()
-  : page_io_infos_()
+  : ObITmpPageIOCallback(common::ObIOCallbackType::TMP_MULTI_PAGE_CALLBACK), page_io_infos_()
 {
   static_assert(sizeof(*this) <= CALLBACK_BUF_SIZE, "IOCallback buf size not enough");
 }
@@ -378,10 +404,15 @@ int ObTmpPageCache::ObTmpMultiPageIOCallback::inner_process(const char *data_buf
   } else if (FALSE_IT(time_guard.click("alloc_data_buf"))) {
   } else {
     for (int32_t i = 0; OB_SUCC(ret) && i < page_io_infos_.count(); i++) {
-      int64_t cur_offset = page_io_infos_.at(i).key_.get_page_id()
-          * ObTmpMacroBlock::get_default_page_size() - offset_;
-      cur_offset += ObTmpMacroBlock::get_header_padding();
-      ObTmpPageCacheValue value(data_buf_ + cur_offset);
+      ObTmpPageCacheValue value(nullptr);
+      if (GCTX.is_shared_storage_mode()) {
+        value.set_buffer(data_buf_ + page_io_infos_.at(i).page_offset_in_data_buffer_);
+      } else {
+        int64_t cur_offset = page_io_infos_.at(i).key_.get_page_id()
+            * ObTmpMacroBlock::get_default_page_size() - offset_;
+        cur_offset += ObTmpMacroBlock::get_header_padding();
+        value.set_buffer(data_buf_ + cur_offset);
+      }
       if (OB_FAIL(process_page(page_io_infos_.at(i).key_, value))) {
         STORAGE_LOG(WARN, "fail to process tmp page cache in callback", K(ret));
       }
@@ -438,13 +469,14 @@ int ObTmpPageCache::ObTmpDirectReadPageIOCallback::inner_process(const char *dat
 }
 
 int ObTmpPageCache::read_io(const ObTmpBlockIOInfo &io_info, ObITmpPageIOCallback *callback,
-    ObMacroBlockHandle &handle)
+    ObStorageObjectHandle &object_handle)
 {
   int ret = OB_SUCCESS;
   common::ObArenaAllocator allocator(ObModIds::OB_MACRO_FILE);
   // fill the read info
-  ObMacroBlockReadInfo read_info;
+  ObStorageObjectReadInfo read_info;
   read_info.io_desc_ = io_info.io_desc_;
+  read_info.mtl_tenant_id_ = MTL_ID();
   read_info.macro_block_id_ = io_info.macro_block_id_;
   read_info.io_timeout_ms_ = io_info.io_timeout_ms_;
   read_info.io_callback_ = callback;
@@ -452,8 +484,8 @@ int ObTmpPageCache::read_io(const ObTmpBlockIOInfo &io_info, ObITmpPageIOCallbac
   read_info.size_ = io_info.size_;
   read_info.io_desc_.set_resource_group_id(THIS_WORKER.get_group_id());
   read_info.io_desc_.set_sys_module_id(ObIOModule::TMP_PAGE_CACHE_IO);
-  if (OB_FAIL(ObBlockManager::async_read_block(read_info, handle))) {
-    STORAGE_LOG(WARN, "fail to async read block", K(ret), K(read_info), KP(callback));
+  if (OB_FAIL(object_handle.async_read(read_info))) {
+    STORAGE_LOG(WARN, "fail to async read block", K(ret), K(read_info));
   }
   return ret;
 }
@@ -687,6 +719,7 @@ void ObTmpFileWaitTask::runTimerTask()
   if (OB_FAIL(mgr_.exec_wait())) {
     STORAGE_LOG(WARN, "fail to wait block", K(ret));
   }
+  // TODO(baichangmin): exec `MTL(ObTenantTmpFileManager *)->get_ss_file_manager().exec_wait_task_once()` in this thread.
 }
 
 ObTmpFileMemTask::ObTmpFileMemTask(ObTmpTenantMemBlockManager &mgr)
@@ -1445,13 +1478,13 @@ int ObTmpTenantMemBlockManager::write_io(
     ObMacroBlockHandle &handle)
 {
   int ret = OB_SUCCESS;
-  const int64_t buf_size = OB_SERVER_BLOCK_MGR.get_macro_block_size();
+  const int64_t buf_size = OB_STORAGE_OBJECT_MGR.get_macro_block_size();
   const int64_t page_size = ObTmpMacroBlock::get_default_page_size();
   int64_t pos = 0;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
     STORAGE_LOG(WARN, "ObTmpFileStore has not been inited", K(ret));
-  } else if (OB_FAIL(THE_IO_DEVICE->check_space_full(OB_SERVER_BLOCK_MGR.get_macro_block_size()))) {
+  } else if (OB_FAIL(LOCAL_DEVICE_INSTANCE.check_space_full(OB_STORAGE_OBJECT_MGR.get_macro_block_size()))) {
     STORAGE_LOG(WARN, "fail to check space full", K(ret));
   } else {
     ObMacroBlockWriteInfo write_info;

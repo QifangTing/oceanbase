@@ -70,6 +70,7 @@ int ObInnerTableSchema::dict_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -110,7 +111,7 @@ int ObInnerTableSchema::all_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT DB1.DATABASE_NAME AS OWNER,        TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE',                    34, 'VIEW')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB1        ON TRG.DATABASE_ID = DB1.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB1.TENANT_ID = EFFECTIVE_TENANT_ID()           AND (TRG.DATABASE_ID = USERENV('SCHEMAID')               OR USER_CAN_ACCESS_OBJ(1, abs(nvl(TRG.BASE_OBJECT_ID,0)), TRG.DATABASE_ID) = 1)        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID() )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT DB1.DATABASE_NAME AS OWNER,        TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE',                    34, 'VIEW')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 2), 2, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 16), 16, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 32), 32, 'YES', 'NO') AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB1        ON TRG.DATABASE_ID = DB1.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB1.TENANT_ID = EFFECTIVE_TENANT_ID()           AND (TRG.DATABASE_ID = USERENV('SCHEMAID')               OR USER_CAN_ACCESS_OBJ(1, abs(nvl(TRG.BASE_OBJECT_ID,0)), TRG.DATABASE_ID) = 1)        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID() )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -120,6 +121,7 @@ int ObInnerTableSchema::all_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -160,7 +162,7 @@ int ObInnerTableSchema::dba_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT DB1.DATABASE_NAME AS OWNER,        TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB1        ON TRG.DATABASE_ID = DB1.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB1.TENANT_ID = EFFECTIVE_TENANT_ID()        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID() )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT DB1.DATABASE_NAME AS OWNER,        TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 2), 2, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 16), 16, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 32), 32, 'YES', 'NO') AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB1        ON TRG.DATABASE_ID = DB1.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB1.TENANT_ID = EFFECTIVE_TENANT_ID()        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID() )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -170,6 +172,7 @@ int ObInnerTableSchema::dba_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -210,7 +213,7 @@ int ObInnerTableSchema::user_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE',                    34, 'VIEW')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS BEFORE_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_ROW,        CAST('NO' AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST('NO' AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM (SELECT * FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID())TRG        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID()  WHERE TRG.DATABASE_ID = USERENV('SCHEMAID') )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__( SELECT TRG.TRIGGER_NAME AS TRIGGER_NAME,        CAST((case when TRG.TRIGGER_TYPE=1 then DECODE(BITAND(TRG.TIMING_POINTS, 30),                                                       2, 'BEFORE STATEMENT',                                                       4, 'BEFORE EACH ROW',                                                       8, 'AFTER EACH ROW',                                                       16, 'AFTER STATEMENT')             when TRG.TRIGGER_TYPE=2 then 'COMPOUND'             when TRG.TRIGGER_TYPE=3 then 'INSTEAD OF' END)             AS VARCHAR2(16)) AS TRIGGER_TYPE,        CAST(DECODE(TRG.TRIGGER_EVENTS,                    1, 'INSERT',                    2, 'UPDATE',                    4, 'DELETE',                    1 + 2, 'INSERT OR UPDATE',                    1 + 4, 'INSERT OR DELETE',                    2 + 4, 'UPDATE OR DELETE',                    1 + 2 + 4, 'INSERT OR UPDATE OR DELETE')             AS VARCHAR2(246)) AS TRIGGERING_EVENT,        DB2.DATABASE_NAME AS TABLE_OWNER,        CAST(DECODE(TRG.BASE_OBJECT_TYPE,                    5, 'TABLE',                    34, 'VIEW')             AS VARCHAR2(18)) AS BASE_OBJECT_TYPE,        TBL.TABLE_NAME AS TABLE_NAME,        CAST(NULL AS VARCHAR2(4000)) AS COLUMN_NAME,        CAST(CONCAT('REFERENCING', CONCAT(CONCAT(' NEW AS ', REF_NEW_NAME), CONCAT(' OLD AS ', REF_OLD_NAME)))             AS VARCHAR2(422)) AS REFERENCING_NAMES,        WHEN_CONDITION AS WHEN_CLAUSE,        CAST(decode(BITAND(TRG.trigger_flags, 1), 1, 'ENABLED', 'DISABLED') AS VARCHAR2(8)) AS STATUS,        TRIGGER_BODY AS DESCRIPTION,        CAST('PL/SQL' AS VARCHAR2(11)) AS ACTION_TYPE,        TRIGGER_BODY AS TRIGGER_BODY,        CAST('NO' AS VARCHAR2(7)) AS CROSSEDITION,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 2), 2, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS BEFORE_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_ROW,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 16), 16, 'YES', 'NO') AS VARCHAR2(3)) AS AFTER_STATEMENT,        CAST(DECODE(BITAND(TRG.TIMING_POINTS, 32), 32, 'YES', 'NO') AS VARCHAR2(3)) AS INSTEAD_OF_ROW,        CAST('YES' AS VARCHAR2(3)) AS FIRE_ONCE,        CAST('NO' AS VARCHAR2(3)) AS APPLY_SERVER_ONLY   FROM (SELECT * FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID())TRG        LEFT JOIN        SYS.ALL_VIRTUAL_TABLE_REAL_AGENT TBL        ON TRG.BASE_OBJECT_ID = TBL.TABLE_ID         AND TBL.TENANT_ID = EFFECTIVE_TENANT_ID()         AND bitand((TBL.TABLE_MODE / 4096), 15) IN (0,1)        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB2        ON TBL.DATABASE_ID = DB2.DATABASE_ID         AND DB2.TENANT_ID = EFFECTIVE_TENANT_ID()  WHERE TRG.DATABASE_ID = USERENV('SCHEMAID') )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -220,6 +223,7 @@ int ObInnerTableSchema::user_triggers_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -270,6 +274,7 @@ int ObInnerTableSchema::all_dependencies_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -320,6 +325,7 @@ int ObInnerTableSchema::dba_dependencies_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -370,6 +376,7 @@ int ObInnerTableSchema::user_dependencies_ora_schema(ObTableSchema &table_schema
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -420,6 +427,7 @@ int ObInnerTableSchema::dba_rsrc_plans_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -470,6 +478,7 @@ int ObInnerTableSchema::dba_rsrc_plan_directives_ora_schema(ObTableSchema &table
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -520,6 +529,7 @@ int ObInnerTableSchema::dba_rsrc_group_mappings_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -570,6 +580,7 @@ int ObInnerTableSchema::dba_recyclebin_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -620,6 +631,7 @@ int ObInnerTableSchema::user_recyclebin_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -670,6 +682,7 @@ int ObInnerTableSchema::dba_rsrc_consumer_groups_ora_schema(ObTableSchema &table
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -710,7 +723,7 @@ int ObInnerTableSchema::dba_ob_ls_locations_ora_schema(ObTableSchema &table_sche
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__(   SELECT          CAST(TO_CHAR(GMT_CREATE) AS VARCHAR2(19)) AS CREATE_TIME,          CAST(TO_CHAR(GMT_MODIFIED) AS VARCHAR2(19)) AS MODIFY_TIME,          CAST(LS_ID AS NUMBER) AS LS_ID,          SVR_IP,          CAST(SVR_PORT AS NUMBER) AS SVR_PORT,          CAST(SQL_PORT AS NUMBER) AS SQL_PORT,          ZONE,          (CASE ROLE WHEN 1 THEN 'LEADER' ELSE 'FOLLOWER' END) AS ROLE,          (CASE ROLE WHEN 1 THEN MEMBER_LIST ELSE NULL END) AS MEMBER_LIST,          CAST((CASE ROLE WHEN 1 THEN PAXOS_REPLICA_NUMBER ELSE NULL END) AS NUMBER) AS PAXOS_REPLICA_NUMBER,          (CASE REPLICA_TYPE           WHEN 0   THEN 'FULL'           WHEN 5   THEN 'LOGONLY'           WHEN 16  THEN 'READONLY'           WHEN 261 THEN 'ENCRYPTION LOGONLY'           ELSE NULL END) AS REPLICA_TYPE,          (CASE ROLE WHEN 1 THEN LEARNER_LIST ELSE NULL END) AS LEARNER_LIST,          (CASE REBUILD            WHEN 0  THEN 'FALSE'            ELSE 'TRUE' END) AS REBUILD   FROM SYS.ALL_VIRTUAL_LS_META_TABLE   WHERE     TENANT_ID = EFFECTIVE_TENANT_ID()   )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__(   SELECT          CAST(TO_CHAR(GMT_CREATE) AS VARCHAR2(19)) AS CREATE_TIME,          CAST(TO_CHAR(GMT_MODIFIED) AS VARCHAR2(19)) AS MODIFY_TIME,          CAST(LS_ID AS NUMBER) AS LS_ID,          SVR_IP,          CAST(SVR_PORT AS NUMBER) AS SVR_PORT,          CAST(SQL_PORT AS NUMBER) AS SQL_PORT,          ZONE,          (CASE ROLE WHEN 1 THEN 'LEADER' ELSE 'FOLLOWER' END) AS ROLE,          (CASE ROLE WHEN 1 THEN MEMBER_LIST ELSE NULL END) AS MEMBER_LIST,          CAST((CASE ROLE WHEN 1 THEN PAXOS_REPLICA_NUMBER ELSE NULL END) AS NUMBER) AS PAXOS_REPLICA_NUMBER,          (CASE REPLICA_TYPE           WHEN 0   THEN 'FULL'           WHEN 5   THEN 'LOGONLY'           WHEN 16  THEN 'READONLY'           WHEN 261 THEN 'ENCRYPTION LOGONLY'           WHEN 1040  THEN 'COLUMNSTORE'           ELSE NULL END) AS REPLICA_TYPE,          (CASE ROLE WHEN 1 THEN LEARNER_LIST ELSE NULL END) AS LEARNER_LIST,          (CASE REBUILD            WHEN 0  THEN 'FALSE'            ELSE 'TRUE' END) AS REBUILD   FROM SYS.ALL_VIRTUAL_LS_META_TABLE   WHERE     TENANT_ID = EFFECTIVE_TENANT_ID()   )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -720,6 +733,7 @@ int ObInnerTableSchema::dba_ob_ls_locations_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -770,6 +784,7 @@ int ObInnerTableSchema::dba_ob_tablet_to_ls_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -820,6 +835,7 @@ int ObInnerTableSchema::dba_ob_tablet_replicas_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -870,6 +886,7 @@ int ObInnerTableSchema::dba_ob_tablegroups_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -920,6 +937,7 @@ int ObInnerTableSchema::dba_ob_tablegroup_partitions_ora_schema(ObTableSchema &t
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -970,6 +988,7 @@ int ObInnerTableSchema::dba_ob_tablegroup_subpartitions_ora_schema(ObTableSchema
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1020,6 +1039,7 @@ int ObInnerTableSchema::dba_ob_databases_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1070,6 +1090,7 @@ int ObInnerTableSchema::dba_ob_tablegroup_tables_ora_schema(ObTableSchema &table
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1120,6 +1141,7 @@ int ObInnerTableSchema::dba_ob_zone_major_compaction_ora_schema(ObTableSchema &t
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1170,6 +1192,7 @@ int ObInnerTableSchema::dba_ob_major_compaction_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1220,6 +1243,7 @@ int ObInnerTableSchema::all_ind_statistics_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1270,6 +1294,7 @@ int ObInnerTableSchema::dba_ind_statistics_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1320,6 +1345,7 @@ int ObInnerTableSchema::user_ind_statistics_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1370,6 +1396,7 @@ int ObInnerTableSchema::dba_ob_backup_jobs_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1420,6 +1447,7 @@ int ObInnerTableSchema::dba_ob_backup_job_history_ora_schema(ObTableSchema &tabl
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1470,6 +1498,7 @@ int ObInnerTableSchema::dba_ob_backup_tasks_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1520,6 +1549,7 @@ int ObInnerTableSchema::dba_ob_backup_task_history_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1570,6 +1600,7 @@ int ObInnerTableSchema::dba_ob_backup_set_files_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1620,6 +1651,7 @@ int ObInnerTableSchema::all_tab_modifications_ora_schema(ObTableSchema &table_sc
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1670,6 +1702,7 @@ int ObInnerTableSchema::dba_tab_modifications_ora_schema(ObTableSchema &table_sc
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1720,6 +1753,7 @@ int ObInnerTableSchema::user_tab_modifications_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1770,6 +1804,7 @@ int ObInnerTableSchema::dba_ob_backup_storage_info_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1820,6 +1855,7 @@ int ObInnerTableSchema::dba_ob_backup_storage_info_history_ora_schema(ObTableSch
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1870,6 +1906,7 @@ int ObInnerTableSchema::dba_ob_backup_delete_policy_ora_schema(ObTableSchema &ta
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1920,6 +1957,7 @@ int ObInnerTableSchema::dba_ob_backup_delete_jobs_ora_schema(ObTableSchema &tabl
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1970,6 +2008,7 @@ int ObInnerTableSchema::dba_ob_backup_delete_job_history_ora_schema(ObTableSchem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2020,6 +2059,7 @@ int ObInnerTableSchema::dba_ob_backup_delete_tasks_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2070,6 +2110,7 @@ int ObInnerTableSchema::dba_ob_backup_delete_task_history_ora_schema(ObTableSche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2120,6 +2161,7 @@ int ObInnerTableSchema::dba_ob_restore_progress_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2170,6 +2212,7 @@ int ObInnerTableSchema::dba_ob_restore_history_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2220,6 +2263,7 @@ int ObInnerTableSchema::dba_ob_archive_dest_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2270,6 +2314,7 @@ int ObInnerTableSchema::dba_ob_archivelog_ora_schema(ObTableSchema &table_schema
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2320,6 +2365,7 @@ int ObInnerTableSchema::dba_ob_archivelog_summary_ora_schema(ObTableSchema &tabl
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2370,6 +2416,7 @@ int ObInnerTableSchema::dba_ob_archivelog_piece_files_ora_schema(ObTableSchema &
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2420,6 +2467,7 @@ int ObInnerTableSchema::dba_ob_backup_parameter_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;

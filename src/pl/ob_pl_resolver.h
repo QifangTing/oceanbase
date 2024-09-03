@@ -342,16 +342,13 @@ public:
                                     const ObUDFInfo &udf_info,
                                     const ObUserDefinedType &user_type,
                                     ObRawExpr *&expr);
-  int resolve_construct(const sql::ObQualifiedName &q_name,
-                        const sql::ObUDFInfo &udf_info,
-                        ObRawExpr *&expr);
   int resolve_record_construct(const sql::ObQualifiedName &q_name,
                                const sql::ObUDFInfo &udf_info,
                                const ObUserDefinedType *user_type,
                                ObRawExpr *&expr);
   int resolve_object_construct(const sql::ObQualifiedName &q_name,
                                const sql::ObUDFInfo &udf_info,
-                               const ObUserDefinedType *user_type,
+                               const ObUserDefinedType &user_type,
                                ObRawExpr *&expr);
   int resolve_collection_construct(const sql::ObQualifiedName &q_name,
                                    const sql::ObUDFInfo &udf_info,
@@ -362,6 +359,16 @@ public:
                              ObIArray<ObRawExpr*> &real_exprs,
                              ObPLCompileUnitAST &unit_ast,
                              sql::ObRawExpr *&expr);
+
+  static
+  int resolve_obj_access_node(ParseNode *node,
+                              common::ObIAllocator &allocator,
+                              sql::ObRawExprFactory &expr_factory,
+                              sql::ObSQLSessionInfo &session_info,
+                              share::schema::ObSchemaGetterGuard &schema_guard,
+                              common::ObMySQLProxy *sql_proxy,
+                              pl::ObPLBlockNS *ns,
+                              ObArray<pl::ObObjAccessIdx> &access_idxs);
   static
   int resolve_obj_access_node(const ParseNode &node,
                               ObSQLSessionInfo &session_info,
@@ -371,6 +378,7 @@ public:
                               ObIArray<ObObjAccessIdent> &obj_access_idents,
                               ObIArray<ObObjAccessIdx>& access_idxs,
                               ObPLPackageGuard *package_guard);
+
   static
   int resolve_cparam_list_simple(const ParseNode &node,
                                  ObRawExprFactory &expr_factory,
@@ -457,7 +465,7 @@ public:
                                const ObPLDataType &ret_type);
   static int build_pl_integer_type(ObPLIntegerType type, ObPLDataType &data_type);
   static bool is_question_mark_value(ObRawExpr *into_expr, ObPLBlockNS *ns);
-  static int set_question_mark_type(ObRawExpr *into_expr, ObPLBlockNS *ns, const ObPLDataType *type);
+  static int set_question_mark_type(ObRawExpr *into_expr, ObPLBlockNS *ns, const ObPLDataType *type, bool need_check = false);
 
   static
   int build_obj_access_func_name(const ObIArray<ObObjAccessIdx> &access_idxs,
@@ -504,10 +512,15 @@ public:
                                    ObIArray<ObRawExpr*>& params,
                                    const ObUserDefinedType *user_type,
                                    ObPLDataType &pl_type);
-  static bool is_json_type_compatible(
-    const ObUserDefinedType *left, const ObUserDefinedType *right);
+  static bool is_json_type_compatible(const ObUserDefinedType *actual_param_type,
+                                      const ObUserDefinedType *formal_param_type);
   static int check_composite_compatible(const ObPLINS &ns,
-    uint64_t left_type_id, uint64_t right_type_id, bool &is_compatible);
+                                        uint64_t actual_param_type_id,
+                                        uint64_t formal_param_type_id,
+                                        bool &is_compatible);
+  static int check_composite_compatible(const ObUserDefinedType *actual_param_type,
+                                        const ObUserDefinedType *formal_param_type,
+                                        bool &is_compatible);
 
   static
   int resolve_nocopy_params(const share::schema::ObIRoutineInfo *routine_info,
@@ -941,8 +954,11 @@ private:
                                    ObPLFunctionAST &func,
                                    ObIArray<ObObjAccessIdx> &access_idxs);
 private:
+  int check_duplicate_condition(const ObPLConditionValue &value,
+                                ObPLDeclareHandlerStmt::DeclareHandler::HandlerDesc &cur_desc,
+                                bool &dup);
   int check_duplicate_condition(const ObPLDeclareHandlerStmt &stmt, const ObPLConditionValue &value,
-                                bool &dup, ObPLDeclareHandlerStmt::DeclareHandler::HandlerDesc* cur_desc);
+                                bool &dup);
   int analyze_actual_condition_type(const ObPLConditionValue &value, ObPLConditionType &type);
 #ifdef OB_BUILD_ORACLE_PL
   int check_collection_constructor(const ParseNode *node, const common::ObString &type_name, bool &is_constructor);

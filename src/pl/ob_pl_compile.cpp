@@ -147,7 +147,11 @@ int ObPLCompiler::init_anonymous_ast(
     } else {
       data_type.reset();
       data_type.set_accuracy(params->at(i).get_accuracy());
-      data_type.set_meta_type(params->at(i).get_meta());
+      if (params->at(i).is_null()) {
+        data_type.set_meta_type(params->at(i).get_param_meta());
+      } else {
+        data_type.set_meta_type(params->at(i).get_meta());
+      }
       pl_type.reset();
       int64_t int_value = 0;
       // 参数化整型常量按照会按照numbger来生成param
@@ -336,7 +340,10 @@ int ObPLCompiler::compile(const uint64_t id, ObPLFunction &func)
   HEAP_VAR(ObPLFunctionAST, func_ast, allocator_) {
     const share::schema::ObRoutineInfo *routine = NULL;
     OZ (schema_guard_.get_routine_info(get_tenant_id_by_object_id(id), id, routine));
-    CK (OB_NOT_NULL(routine));
+    if (OB_SUCC(ret) && OB_ISNULL(routine)) {
+      ret = OB_ERR_SP_DOES_NOT_EXIST;
+      LOG_WARN("routine info is not exist!", K(ret), K(id));
+    }
     OZ (init_function(routine, func));
     OZ (compile(*routine, func_ast, func));
   }

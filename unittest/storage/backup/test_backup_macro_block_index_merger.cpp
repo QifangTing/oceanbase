@@ -15,6 +15,7 @@
 #define private public
 #define protected public
 
+#include "observer/omt/ob_tenant_mtl_helper.h"
 #include "storage/backup/ob_backup_data_struct.h"
 #include "storage/backup/ob_backup_index_merger.h"
 #include "storage/backup/ob_backup_index_store.h"
@@ -126,6 +127,11 @@ public:
   virtual ~TestBackupMacroIndexMerger();
   virtual void SetUp();
   virtual void TearDown();
+  static void SetUpTestCase()
+  {
+    // ASSERT_EQ(OB_SUCCESS, ObDeviceManager::get_instance().init_devices_env());
+    // EXPECT_EQ(0, ObIOManager::get_instance().init(1024L * 1024L * 1024L, 10));
+  }
 
 private:
   void inner_init_();
@@ -190,12 +196,8 @@ void TestBackupMacroIndexMerger::SetUp()
   }
   // set observer memory limit
   CHUNK_MGR.set_limit(8L * 1024L * 1024L * 1024L);
-  ret = ObTmpFileManager::get_instance().init();
-  if (OB_INIT_TWICE == ret) {
-    ret = OB_SUCCESS;
-  } else {
-    ASSERT_EQ(OB_SUCCESS, ret);
-  }
+  ASSERT_EQ(OB_SUCCESS, tmp_file::ObTmpPageCache::get_instance().init("sn_tmp_page_cache", 1));
+
   static ObTenantBase tenant_ctx(OB_SYS_TENANT_ID);
   ObTenantEnv::set_tenant(&tenant_ctx);
   ObTenantIOManager *io_service = nullptr;
@@ -203,14 +205,23 @@ void TestBackupMacroIndexMerger::SetUp()
   EXPECT_EQ(OB_SUCCESS, ObTenantIOManager::mtl_init(io_service));
   EXPECT_EQ(OB_SUCCESS, io_service->start());
   tenant_ctx.set(io_service);
+
+  tmp_file::ObTenantTmpFileManager *tf_mgr = nullptr;
+  EXPECT_EQ(OB_SUCCESS, mtl_new_default(tf_mgr));
+  EXPECT_EQ(OB_SUCCESS, tmp_file::ObTenantTmpFileManager::mtl_init(tf_mgr));
+  tf_mgr->get_sn_file_manager().page_cache_controller_.write_buffer_pool_.default_wbp_memory_limit_ = 40*1024*1024;
+  EXPECT_EQ(OB_SUCCESS, tf_mgr->start());
+  tenant_ctx.set(tf_mgr);
+
   ObTenantEnv::set_tenant(&tenant_ctx);
   inner_init_();
 }
 
 void TestBackupMacroIndexMerger::TearDown()
 {
-  ObTmpFileManager::get_instance().destroy();
+  tmp_file::ObTmpPageCache::get_instance().destroy();
   ObKVGlobalCache::get_instance().destroy();
+  common::ObClockGenerator::destroy();
 }
 
 void TestBackupMacroIndexMerger::clean_env_()
@@ -275,6 +286,7 @@ void TestBackupMacroIndexMerger::build_backup_index_store_param_(ObBackupIndexSt
   store_param.backup_data_type_ = backup_data_type_;
   store_param.turn_id_ = turn_id_;
   store_param.retry_id_ = retry_id_;
+  store_param.dest_id_ = dest_id_;
 }
 
 void TestBackupMacroIndexMerger::fake_init_macro_index_merger_(FakeUnorderedMacroBlockIndexMerger &merger)

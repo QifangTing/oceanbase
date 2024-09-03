@@ -15,6 +15,8 @@
 #include "ob_log_operator_factory.h"
 #include "ob_logical_operator.h"
 #include "ob_join_order.h"
+#include "sql/engine/join/ob_join_filter_material_control_info.h"
+
 namespace oceanbase
 {
 namespace sql
@@ -119,6 +121,7 @@ namespace sql
                                           const int64_t buf_len,
                                           int64_t &pos);
     virtual int do_re_est_cost(EstimateCostInfo &param, double &card, double &op_cost, double &cost) override;
+    virtual int est_ambient_card() override;
     /*
      * IN         right_child_sharding_info   the join's right child sharding info
      * IN         right_keys                  the right join equal condition
@@ -165,6 +168,21 @@ namespace sql
     common::ObIArray<ObExecParamRawExpr *> &get_above_pushdown_left_params() { return above_pushdown_left_params_; }
     common::ObIArray<ObExecParamRawExpr *> &get_above_pushdown_right_params() { return above_pushdown_right_params_; }
     virtual int get_card_without_filter(double &card) override;
+
+    inline bool use_realistic_runtime_bloom_filter_size()
+    {
+      return jf_material_control_info_.enable_material_;
+    }
+
+    inline const ObJoinFilterMaterialControlInfo &get_jf_material_control_info() const
+    {
+      return jf_material_control_info_;
+    }
+
+    inline ObJoinFilterMaterialControlInfo &get_jf_material_control_info()
+    {
+      return jf_material_control_info_;
+    }
 
   private:
     int set_use_batch(ObLogicalOperator* root);
@@ -251,7 +269,7 @@ namespace sql
     JoinPath *join_path_;
     common::ObSEArray<ObExecParamRawExpr *, 4, common::ModulePageAllocator, true> above_pushdown_left_params_;
     common::ObSEArray<ObExecParamRawExpr *, 4, common::ModulePageAllocator, true> above_pushdown_right_params_;
-
+    ObJoinFilterMaterialControlInfo jf_material_control_info_;
     DISALLOW_COPY_AND_ASSIGN(ObLogJoin);
   };
 

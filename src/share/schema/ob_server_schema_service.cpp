@@ -290,8 +290,8 @@ bool ObServerSchemaService::check_inner_stat() const
 int ObServerSchemaService::check_stop() const
 {
   int ret = OB_SUCCESS;
-  if (observer::SS_STOPPING == GCTX.status_
-      || observer::SS_STOPPED == GCTX.status_) {
+  if (ObServiceStatus::SS_STOPPING == GCTX.status_
+      || ObServiceStatus::SS_STOPPED == GCTX.status_) {
     ret = OB_SERVER_IS_STOPPING;
     LOG_WARN("observer is stopping", K(ret));
   }
@@ -4328,14 +4328,8 @@ int ObServerSchemaService::apply_##SCHEMA##_schema_to_cache( \
   } else {                                                               \
     FOREACH_CNT_X(schema_key, schema_keys, OB_SUCC(ret)) {               \
       if (OB_FAIL(mgr.del_##SCHEMA(schema_key->get_##SCHEMA##_key()))) { \
-        if (GCTX.is_standby_cluster() \
-            && OB_SYS_TENANT_ID == tenant_id \
-            && OB_ENTRY_NOT_EXIST == ret) { \
-          ret = OB_SUCCESS; \
-        } else { \
-          LOG_WARN("del "#SCHEMA" failed", K(ret),                         \
-                   #SCHEMA"_key", schema_key->get_##SCHEMA##_key());       \
-        } \
+        LOG_WARN("del "#SCHEMA" failed", K(ret),                         \
+                  #SCHEMA"_key", schema_key->get_##SCHEMA##_key());       \
       }                                                                  \
     }                                                                    \
     ALLOW_NEXT_LOG();                                                    \

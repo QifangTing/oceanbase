@@ -892,7 +892,8 @@ int ObArchiveStore::read_piece_checkpoint(const int64_t dest_id, const int64_t r
   return ret;
 }
 
-int ObArchiveStore::write_piece_checkpoint(const int64_t dest_id, const int64_t round_id, const int64_t piece_id, const int64_t file_id, const ObPieceCheckpointDesc &desc) const
+int ObArchiveStore::write_piece_checkpoint(const int64_t dest_id, const int64_t round_id, const int64_t piece_id,
+    const int64_t file_id, const share::SCN &old_checkpoint_scn, const ObPieceCheckpointDesc &desc) const
 {
   int ret = OB_SUCCESS;
   ObBackupPath full_path;
@@ -919,9 +920,29 @@ int ObArchiveStore::write_piece_checkpoint(const int64_t dest_id, const int64_t 
       LOG_WARN("failed to get piece checkpoint dir path", K(ret), K(dest), K(dest_id), K(round_id), K(piece_id));
     } else if (OB_FAIL(mgr.init(dir_path, OB_STR_CHECKPOINT_FILE_NAME, ObBackupFileSuffix::ARCHIVE, get_storage_info()))) {
       LOG_WARN("failed to init ObArchiveCheckPointMgr", K(ret), K(dir_path));
-    } else if (OB_FAIL(mgr.write(desc.checkpoint_scn_.get_val_for_inner_table_field()))) {
+    } else if (OB_FAIL(mgr.write(old_checkpoint_scn.get_val_for_inner_table_field(),
+                               desc.checkpoint_scn_.get_val_for_inner_table_field()))) {
       LOG_WARN("failed to write checkpoint info", K(ret), K(desc));
     }
+  }
+  return ret;
+}
+
+int ObArchiveStore::delete_piece_his_checkpoint(const int64_t dest_id, const int64_t round_id, const int64_t piece_id, const int64_t file_id, const uint64_t checkpoint_scn) const
+{
+  int ret = OB_SUCCESS;
+  ObBackupPath dir_path;
+  const ObBackupDest &dest = get_backup_dest();
+  ObArchiveCheckpointMgr mgr;
+  if (!is_init()) {
+    ret = OB_NOT_INIT;
+    LOG_WARN("ObArchiveStore not init", K(ret));
+  } else if (OB_FAIL(ObArchivePathUtil::get_piece_checkpoint_dir_path(dest, dest_id, round_id, piece_id, dir_path))) {
+    LOG_WARN("failed to get piece checkpoint dir path", K(ret), K(dest), K(dest_id), K(round_id), K(piece_id));
+  } else if (OB_FAIL(mgr.init(dir_path, OB_STR_CHECKPOINT_FILE_NAME, ObBackupFileSuffix::ARCHIVE, get_storage_info()))) {
+    LOG_WARN("failed to init ObArchiveCheckPointMgr", K(ret), K(dir_path));
+  } else if (OB_FAIL(mgr.del_history_files(checkpoint_scn))) {
+    LOG_WARN("fail to delete all checkpoint files", K(ret));
   }
   return ret;
 }
@@ -1264,12 +1285,12 @@ int ObArchiveStore::get_single_piece_info(const int64_t dest_id, const int64_t r
     LOG_WARN("ObArchiveStore not init", K(ret));
   } else if (OB_FAIL(read_single_piece(dest_id, round_id, piece_id, single_piece))) {
     // not a frozen piece, build single piece info with extend and checkpoint info.
-    if (OB_BACKUP_FILE_NOT_EXIST == ret) {
+    if (OB_OBJECT_NOT_EXIST == ret) {
       ObPieceCheckpointDesc checkpoint_desc;
       ObTenantArchivePieceInfosDesc extend_desc;
       ret = OB_SUCCESS;
       if (OB_FAIL(read_piece_checkpoint(dest_id, round_id, piece_id, 0, checkpoint_desc))) {
-        if (OB_BACKUP_FILE_NOT_EXIST == ret) {
+        if (OB_OBJECT_NOT_EXIST == ret) {
           ret = OB_SUCCESS;
           is_empty_piece = true;
         } else {
@@ -1889,7 +1910,7 @@ int ObArchiveStore::ObRoundFilter::func(const dirent *entry)
   } else if (OB_FAIL(parse_round_file_(dir_name, dest_id, round_id))) {
     LOG_WARN("failed to parse dir name", K(ret), K(dir_name));
   } else if (OB_FAIL(store_->read_round_end(dest_id, round_id, end_desc))) {
-    if (OB_BACKUP_FILE_NOT_EXIST == ret) {
+    if (OB_OBJECT_NOT_EXIST == ret) {
       ret = OB_SUCCESS;
       if (OB_FAIL(store_->read_round_start(dest_id, round_id, start_desc))) {
         LOG_WARN("failed to read round start file", K(ret), K(dest_id), K(round_id));

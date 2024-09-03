@@ -630,6 +630,7 @@ int ObLogRestoreHandler::check_restore_done(const SCN &recovery_end_scn, bool &d
   palf::LSN end_lsn;
   int64_t id = 0;
   done = false;
+  ObLogService *logservice = MTL(ObLogService*);
   {
     RLockGuard guard(lock_);
     if (IS_NOT_INIT) {
@@ -638,6 +639,9 @@ int ObLogRestoreHandler::check_restore_done(const SCN &recovery_end_scn, bool &d
     } else if (OB_UNLIKELY(!recovery_end_scn.is_valid())) {
       ret = OB_INVALID_ARGUMENT;
       CLOG_LOG(WARN, "invalid argument", K(ret), K(recovery_end_scn));
+    } else if (OB_ISNULL(logservice)) {
+      ret = OB_ERR_UNEXPECTED;
+      CLOG_LOG(WARN, "unexpected error, ObLogService must not be NULL", K(ret), K(recovery_end_scn));
     } else if (restore_context_.seek_done_) {
       end_lsn = restore_context_.lsn_;
     } else if (OB_FAIL(palf_handle_.get_end_scn(end_scn))) {
@@ -645,8 +649,10 @@ int ObLogRestoreHandler::check_restore_done(const SCN &recovery_end_scn, bool &d
     } else if (end_scn < recovery_end_scn) {
       ret = OB_EAGAIN;
       CLOG_LOG(WARN, "log restore not finish", K(ret), K_(id), K(end_scn), K(recovery_end_scn));
-    } else if (OB_FAIL(palf_handle_.seek(recovery_end_scn, iter))) {
+    } else if (OB_FAIL(seek_log_iterator(ObLSID(id_), recovery_end_scn, iter))) {
       CLOG_LOG(WARN, "palf seek failed", K(ret), K_(id));
+    } else if (OB_FAIL(iter.set_io_context(palf::LogIOContext(MTL_ID(), id_, palf::LogIOUser::RESTORE)))) {
+      CLOG_LOG(WARN, "set_io_context failed", K(ret), K_(id));
     } else if (OB_FAIL(iter.next())) {
       CLOG_LOG(WARN, "next entry failed", K(ret));
     } else if (OB_FAIL(iter.get_entry(entry, end_lsn))) {
@@ -670,8 +676,11 @@ int ObLogRestoreHandler::check_restore_done(const SCN &recovery_end_scn, bool &d
   }
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(MTL(ObLogService*)->get_log_replay_service()->is_replay_done(
-            ObLSID(id), end_lsn, done))) {
+    ObLogReplayService *replayservice = logservice->get_log_replay_service();
+    if (OB_ISNULL(replayservice)) {
+      ret = OB_ERR_UNEXPECTED;
+      CLOG_LOG(WARN, "unexpected error, ObLogReplayService must not be NULL", K(ret), K(recovery_end_scn));
+    } else if (OB_FAIL(replayservice->is_replay_done(ObLSID(id), end_lsn, done))) {
       CLOG_LOG(WARN, "is_replay_done failed", K(ret), K(id), K(end_lsn));
     } else if (! done) {
       ret = OB_EAGAIN;
@@ -856,7 +865,7 @@ bool ObLogRestoreHandler::restore_to_end() const
   RLockGuard guard(lock_);
   return restore_to_end_unlock_();
 }
-
+ERRSIM_POINT_DEF(ERRSIM_LS_STATE_NOT_MATCH);
 int ObLogRestoreHandler::check_restore_to_newest_from_service_(
     const share::ObRestoreSourceServiceAttr &service_attr,
     const share::SCN &end_scn,
@@ -864,27 +873,10 @@ int ObLogRestoreHandler::check_restore_to_newest_from_service_(
 {
   int ret = OB_SUCCESS;
   bool offline_log_exist = false;
-  share::ObTenantRole tenant_role;
-  share::schema::ObTenantStatus tenant_status;
   palf::AccessMode access_mode;
-  const char *db_name = service_attr.user_.mode_ == common::ObCompatibilityMode::MYSQL_MODE ? OB_SYS_DATABASE_NAME : OB_ORA_SYS_SCHEMA_NAME;
-  ObSqlString user;
-  char passwd[OB_MAX_PASSWORD_LENGTH + 1] = {0};
   SMART_VAR(share::ObLogRestoreProxyUtil, proxy_util) {
-    if (!service_attr.is_valid()) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(service_attr.get_password(passwd, sizeof(passwd)))) {
-      CLOG_LOG(WARN, "get_password failed", K(id_), K(service_attr));
-    } else if (OB_FAIL(service_attr.get_user_str_(user))) {
-      CLOG_LOG(WARN, "get user str failed", K(service_attr));
-    } else if (OB_FAIL(proxy_util.init(MTL_ID(), service_attr.addr_,
-            user.ptr(), passwd, db_name))) {
-      CLOG_LOG(WARN, "proxy_util init failed", K(id_));
-    } else if (OB_FAIL(proxy_util.get_tenant_info(tenant_role, tenant_status))) {
-      CLOG_LOG(WARN, "get tenant info failed", K(id_), K(service_attr));
-    } else if (! tenant_role.is_standby() || share::schema::ObTenantStatus::TENANT_STATUS_NORMAL != tenant_status) {
-      ret = OB_SOURCE_TENANT_STATE_NOT_MATCH;
-      CLOG_LOG(WARN, "tenant role or status not match", K(id_), K(tenant_role), K(tenant_status), K(service_attr));
+    if (OB_FAIL(proxy_util.init_with_service_attr(MTL_ID(), &service_attr))) {
+      CLOG_LOG(WARN, "proxy_util init failed", K(id_), K(service_attr));
     } else if (OB_FAIL(proxy_util.get_max_log_info(share::ObLSID(id_), access_mode, archive_scn))) {
       // OB_ENTRY_NOT_EXIST, ls not exist in gv$ob_log_stat, a) ls has no leader; b) access virtual table failed; c) ls gc
       if (OB_ENTRY_NOT_EXIST == ret) {
@@ -921,7 +913,10 @@ int ObLogRestoreHandler::check_restore_to_newest_from_service_(
       CLOG_LOG(INFO, "check_restore_to_newest succ", K(id_), K(archive_scn), K(end_scn));
     }
   }
-
+   if (OB_UNLIKELY(ERRSIM_LS_STATE_NOT_MATCH)) {
+    ret = OB_SUCC(ret) ? OB_SOURCE_LS_STATE_NOT_MATCH : ret;
+    CLOG_LOG(WARN, "ERRSIM_LS_STATE_NOT_MATCH is on", KR(ret));
+   }
   // if connect to source tenant denied, rewrite ret_code
   if (-ER_ACCESS_DENIED_ERROR == ret) {
     ret = OB_PASSWORD_WRONG;
@@ -1009,21 +1004,23 @@ int ObLogRestoreHandler::check_offline_log_(bool &done)
 {
   int ret = OB_SUCCESS;
   share::SCN replayed_scn;
-  palf::LSN replayed_lsn;
-  palf::PalfHandleGuard guard;
-  palf::PalfBufferIterator iter;
+  PalfBufferIterator iter;
   done = false;
-  if (OB_FAIL(MTL(ObLogService*)->get_log_replay_service()->get_max_replayed_scn(
-          share::ObLSID(id_), replayed_scn))) {
+  ObLogService *logservice = MTL(ObLogService*);
+  ObLogReplayService *replayservice = NULL;
+  if (OB_ISNULL(logservice)) {
+    ret = OB_ERR_UNEXPECTED;
+    CLOG_LOG(WARN, "unexpected error, ObLogService must not be NULL");
+  } else if (FALSE_IT(replayservice = logservice->get_log_replay_service())) {
+  } else if (OB_ISNULL(replayservice)) {
+    ret = OB_ERR_UNEXPECTED;
+    CLOG_LOG(WARN, "unexpected error, ObLogReplayService must not be NULL");
+  } else if (OB_FAIL(replayservice->get_max_replayed_scn(share::ObLSID(id_), replayed_scn))) {
     CLOG_LOG(WARN, "get replayed_lsn failed", K(id_));
-  } else if (OB_FAIL(MTL(ObLogService*)->open_palf(share::ObLSID(id_), guard))) {
-    CLOG_LOG(WARN, "open_palf failed", K(id_));
-    // rewrite ret_code
-    ret = OB_EAGAIN;
-  } else if (OB_FAIL(guard.locate_by_scn_coarsely(replayed_scn, replayed_lsn))) {
-    CLOG_LOG(WARN, "locate failed", K(id_), K(replayed_scn));
-  } else if (OB_FAIL(guard.seek(replayed_lsn, iter))) {
-    CLOG_LOG(WARN, "seek failed", K(id_), K(replayed_lsn));
+  } else if (OB_FAIL(seek_log_iterator(ObLSID(id_), replayed_scn, iter))) {
+    CLOG_LOG(WARN, "seek failed", K(id_));
+  } else if (OB_FAIL(iter.set_io_context(palf::LogIOContext(MTL_ID(), id_, palf::LogIOUser::RESTORE)))) {
+    CLOG_LOG(WARN, "set_io_context failed", K(id_));
   } else {
     palf::LogEntry entry;
     palf::LSN lsn;

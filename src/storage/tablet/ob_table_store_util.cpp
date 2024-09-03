@@ -560,6 +560,46 @@ int ObSSTableArray::get_all_tables(ObIArray<ObITable *> &tables) const
   return ret;
 }
 
+int ObSSTableArray::replace_twin_majors_and_build_new(
+    const ObIArray<ObITable *> &tables_array,
+    ObIArray<ObITable *> &major_tables) const
+{
+  int ret = OB_SUCCESS;
+  ObITable* new_co_major = nullptr; // new co major to replace old row store major
+  if (OB_UNLIKELY(!is_valid())) {
+    ret = OB_NOT_INIT;
+    LOG_WARN("not init", K(ret));
+  } else if (tables_array.count() != 1) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("invalid major table cnt for replacing old row store", K(ret), K(tables_array));
+  } else if (FALSE_IT(new_co_major = tables_array.at(0))) {
+  } else if (OB_UNLIKELY(nullptr == new_co_major || !new_co_major->is_column_store_sstable())) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("unexpected new co table", K(ret), KPC(new_co_major));
+  } else {
+    ObSSTable *table = nullptr;
+    for (int64_t i = 0; OB_SUCC(ret) && i < cnt_; ++i) {
+      if (OB_ISNULL(table = sstable_array_[i])) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("get unexpected null table", K(ret));
+      } else if (!table->get_key().is_row_store_major_sstable()) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("unexpected sstable type", K(ret), KPC(table));
+      } else if (ObITable::is_twin_major_sstable(table->get_key(), new_co_major->get_key())) {
+        // skip the old row store major
+      } else if (OB_FAIL(major_tables.push_back(table))) {
+        LOG_WARN("fail to push sstable address into array", K(ret), K(i), K(major_tables));
+      }
+    }
+
+    if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(major_tables.push_back(new_co_major))) {
+      LOG_WARN("fail to push sstable address into array", K(ret), KPC(new_co_major), K(major_tables));
+    }
+  }
+  return ret;
+}
+
 int ObSSTableArray::get_all_table_wrappers(
     ObIArray<ObSSTableWrapper> &table_wrappers,
     const bool need_unpack) const
@@ -703,7 +743,7 @@ int ObSSTableArray::inc_meta_ref_cnt(bool &inc_success) const
         LOG_WARN("addr is invalid", K(ret), K(addr));
       } else if (OB_FAIL(addr.get_block_addr(macro_id, offset, size))) {
         LOG_WARN("fail to get macro id from addr", K(ret), K(addr));
-      } else if (OB_FAIL(OB_SERVER_BLOCK_MGR.inc_ref(macro_id))) {
+      } else if (OB_FAIL(OB_STORAGE_OBJECT_MGR.inc_ref(macro_id))) {
         LOG_ERROR("fail to increase ref cnt for sstable meta's macro block", K(ret), K(macro_id));
       } else {
         sstable_cnt++;
@@ -729,7 +769,7 @@ int ObSSTableArray::inc_meta_ref_cnt(bool &inc_success) const
           LOG_ERROR("addr is invalid", K(tmp_ret), K(addr));
         } else if (OB_TMP_FAIL(addr.get_block_addr(macro_id, offset, size))) {
           LOG_ERROR("fail to get macro id from addr", K(tmp_ret), K(addr));
-        } else if (OB_TMP_FAIL(OB_SERVER_BLOCK_MGR.dec_ref(macro_id))) {
+        } else if (OB_TMP_FAIL(OB_STORAGE_OBJECT_MGR.dec_ref(macro_id))) {
           LOG_ERROR("fail to decrease ref cnt for sstable meta's macro block", K(tmp_ret), K(macro_id));
         } else {
           LOG_DEBUG("decrease sstable meta's macro ref", K(tmp_ret), K(addr), K(macro_id), KPC(sstable));
@@ -817,7 +857,7 @@ void ObSSTableArray::dec_meta_ref_cnt() const
         LOG_ERROR("addr is invalid", K(ret), K(addr));
       } else if (OB_FAIL(addr.get_block_addr(macro_id, offset, size))) {
         LOG_ERROR("fail to get macro id from addr", K(ret), K(addr));
-      } else if (OB_FAIL(OB_SERVER_BLOCK_MGR.dec_ref(macro_id))) {
+      } else if (OB_FAIL(OB_STORAGE_OBJECT_MGR.dec_ref(macro_id))) {
         LOG_ERROR("fail to decrease ref cnt for sstable meta's macro block", K(ret), K(macro_id));
       } else {
         sstable_cnt++;

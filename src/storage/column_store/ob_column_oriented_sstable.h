@@ -33,7 +33,6 @@ class ObTableHandleV2;
 class ObICGIterator;
 class ObCOSSTableV2;
 
-
 /*
  * ObSSTableWrapper is used for guaranteeing the lifetime of cg sstable
  * ONLY CG SSTables need to be guarded by meta_handle
@@ -103,10 +102,11 @@ enum ObCOSSTableBaseType : int32_t
 
 enum ObCOMajorSSTableStatus: uint8_t {
   INVALID_CO_MAJOR_SSTABLE_STATUS = 0,
-  COL_WITH_ALL, // all cg + normal cg
-  COL_ONLY_ALL, // all cg only (schema have all cg)
-  PURE_COL, // rowkey cg + normal cg
-  PURE_COL_ONLY_ALL, // all cg only (schema do not have all cg)
+  COL_WITH_ALL = 1, // all cg + normal cg
+  COL_ONLY_ALL = 2, // all cg only (schema have all cg)
+  PURE_COL = 3, // rowkey cg + normal cg
+  PURE_COL_ONLY_ALL = 4, // all cg only (schema do not have all cg)
+  COL_REPLICA_MAJOR = 5, // temp status, row store major from F/R replica for column store replica
   MAX_CO_MAJOR_SSTABLE_STATUS
 };
 /*
@@ -120,6 +120,8 @@ enum ObCOMajorSSTableStatus: uint8_t {
   |     PURE_COL    |     EACH      |      EACH     |  YES  |
   +-----------------+---------------+---------------+-------+
   |PURE_COL_ONLY_ALL|     EACH      |      ALL      |   NO  |
+  +-----------------+---------------+---------------+-------+
+  |COL_REPLICA_MAJOR|    ROW STORE  |   ROW STORE   |  YES  |
   +-----------------+---------------+---------------+-------+
 */
 inline bool is_valid_co_major_sstable_status(const ObCOMajorSSTableStatus& major_sstable_status)
@@ -164,6 +166,7 @@ public:
         && base_type_ > ObCOSSTableBaseType::INVALID_TYPE && base_type_ < ObCOSSTableBaseType::MAX_TYPE
         && key_.column_group_idx_ < cs_meta_.column_group_cnt_;
   }
+  int64_t get_data_checksum() const override;
   int fetch_cg_sstable(
       const uint32_t cg_idx,
       ObSSTableWrapper &cg_wrapper) const;
@@ -220,6 +223,7 @@ public:
       ObTableAccessContext &context,
       const common::ObIArray<blocksstable::ObDatumRowkey> &rowkeys,
       ObStoreRowIterator *&row_iter) override;
+  int fill_column_ckm_array(const ObStorageSchema &storage_schema, ObIArray<int64_t> &column_checksums) const;
   INHERIT_TO_STRING_KV("ObSSTable", ObSSTable, KP(this), K_(cs_meta),
       K_(base_type), K_(is_cgs_empty_co), K_(valid_for_cs_reading));
 private:

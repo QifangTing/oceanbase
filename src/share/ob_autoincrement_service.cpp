@@ -784,6 +784,37 @@ int ObAutoincrementService::try_lock_autoinc_row(const uint64_t &tenant_id,
   return ret;
 }
 
+int ObAutoincrementService::calculate_idempotent_autoinc_val_for_ddl(
+                                               AutoincParam *autoinc_param,
+                                               const int64_t table_all_slice_count,
+                                               const int64_t table_level_slice_idx,
+                                               const int64_t slice_row_idx,
+                                               const int64_t autoinc_range_interval,
+                                               uint64_t &autoinc_value)
+{
+  int ret = OB_SUCCESS;
+
+  if (OB_ISNULL(autoinc_param)) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("invalid argument", KR(ret), K(autoinc_param),
+             K(table_all_slice_count), K(table_level_slice_idx), K(slice_row_idx));
+  } else {
+    const int64_t range_id = slice_row_idx / autoinc_range_interval;
+    const int64_t row_id_in_range = slice_row_idx % autoinc_range_interval;
+    const ObObjType column_type = autoinc_param->autoinc_col_type_;
+    // for now, only `offset` param is supported, `increment` param is not supported
+    const uint64_t offset = autoinc_param->autoinc_offset_;
+    const uint64_t max_value = get_max_value(column_type);
+    autoinc_value =
+        min(offset + table_level_slice_idx * autoinc_range_interval +
+                (table_all_slice_count * range_id * autoinc_range_interval) + row_id_in_range,
+            max_value);
+    autoinc_param->global_value_to_sync_ = max(autoinc_param->global_value_to_sync_, autoinc_value);
+  }
+
+  return ret;
+}
+
 int ObAutoincrementService::clear_autoinc_cache_all(const uint64_t tenant_id,
                                                     const uint64_t table_id,
                                                     const uint64_t column_id,
@@ -2017,9 +2048,6 @@ int ObAutoIncInnerTableProxy::next_autoinc_value(const AutoincKey &key,
             if (sql_len >= OB_MAX_SQL_LENGTH || sql_len <= 0) {
               ret = OB_SIZE_OVERFLOW;
               LOG_WARN("failed to format sql. size not enough", K(ret), K(sql_len));
-            } else if (GCTX.is_standby_cluster() && OB_SYS_TENANT_ID != exec_tenant_id) {
-              ret = OB_OP_NOT_ALLOW;
-              LOG_WARN("can't write sys table now", K(ret), K(exec_tenant_id));
             } else if (OB_FAIL(trans.write(exec_tenant_id, sql, affected_rows))) {
               LOG_WARN("failed to write data", K(ret));
             } else if (affected_rows != 1) {
@@ -2315,9 +2343,6 @@ int ObAutoIncInnerTableProxy::sync_autoinc_value(const AutoincKey &key,
                     table_name, sync_value, new_seq_value,
                     OB_INVALID_TENANT_ID, table_id, column_id, inner_autoinc_version))) {
           LOG_WARN("failed to assign sql", K(ret));
-        } else if (GCTX.is_standby_cluster() && OB_SYS_TENANT_ID != exec_tenant_id) {
-          ret = OB_OP_NOT_ALLOW;
-          LOG_WARN("can't write sys table now", K(ret), K(exec_tenant_id));
         } else if (OB_FAIL((trans.write(exec_tenant_id, sql.ptr(), affected_rows)))) {
           LOG_WARN("failed to execute", K(sql), K(ret));
         } else if (!is_single_row(affected_rows)) {
@@ -2458,9 +2483,6 @@ int ObAutoIncInnerTableProxy::read_and_push_inner_table(const AutoincKey &key,
                       table_name, new_seq_value,
                       OB_INVALID_TENANT_ID, table_id, column_id, inner_autoinc_version))) {
             LOG_WARN("failed to assign sql", K(ret));
-          } else if (GCTX.is_standby_cluster() && OB_SYS_TENANT_ID != exec_tenant_id) {
-            ret = OB_OP_NOT_ALLOW;
-            LOG_WARN("can't write sys table now", K(ret), K(exec_tenant_id));
           } else if (OB_FAIL((trans.write(exec_tenant_id, sql.ptr(), affected_rows)))) {
             LOG_WARN("failed to execute", K(sql), K(ret));
           } else if (!is_single_row(affected_rows)) {

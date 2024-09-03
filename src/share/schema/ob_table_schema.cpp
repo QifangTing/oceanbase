@@ -417,33 +417,17 @@ int ObSimpleTableSchemaV2::get_zone_replica_attr_array_inherit(
 {
   int ret = OB_SUCCESS;
   const uint64_t tenant_id = get_tenant_id();
-  bool use_tenant_locality = !is_sys_tenant(tenant_id) && GCTX.is_standby_cluster();
   locality.reuse();
-  if (!has_partition()) {
-    // No partition, no concept of locality
-  } else if (!use_tenant_locality) {
-    const share::schema::ObSimpleTenantSchema *simple_tenant = nullptr;
-    if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, simple_tenant))) {
-      LOG_WARN("fail to get tenant info", K(ret), K(tenant_id));
-    } else if (OB_UNLIKELY(nullptr == simple_tenant)) {
-      ret = OB_TENANT_NOT_EXIST;
-      LOG_WARN("tenant schema ptr is null", K(ret), KPC(simple_tenant));
-    } else {
-      use_tenant_locality = simple_tenant->is_restore();
-    }
-  }
-  if (OB_FAIL(ret)) {
-  } else {
-    // Locality is not set when creating table, take tenant's fill
-    const ObTenantSchema *tenant_schema = NULL;
-    if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, tenant_schema))) {
-      LOG_WARN("fail to get tenant schema", K(ret), K(table_id_), K(tenant_id));
-    } else if (OB_UNLIKELY(NULL == tenant_schema)) {
-      ret = OB_ERR_UNEXPECTED;
-      LOG_WARN("tenant schema null", K(ret), K(table_id_), K(tenant_id), KP(tenant_schema));
-    } else if (OB_FAIL(tenant_schema->get_zone_replica_attr_array_inherit(schema_guard, locality))) {
-      LOG_WARN("fail to get zone replica num array", K(ret), K(table_id_), K(tenant_id));
-    }
+
+  // Locality is not set when creating table, take tenant's fill
+  const ObTenantSchema *tenant_schema = NULL;
+  if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, tenant_schema))) {
+    LOG_WARN("fail to get tenant schema", K(ret), K(table_id_), K(tenant_id));
+  } else if (OB_UNLIKELY(NULL == tenant_schema)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("tenant schema null", K(ret), K(table_id_), K(tenant_id), KP(tenant_schema));
+  } else if (OB_FAIL(tenant_schema->get_zone_replica_attr_array_inherit(schema_guard, locality))) {
+    LOG_WARN("fail to get zone replica num array", K(ret), K(table_id_), K(tenant_id));
   }
   return ret;
 }
@@ -454,32 +438,15 @@ int ObSimpleTableSchemaV2::get_primary_zone_inherit(
 {
   int ret = OB_SUCCESS;
   const uint64_t tenant_id = get_tenant_id();
-  const uint64_t tablegroup_id = get_tablegroup_id();
-  const uint64_t database_id = get_database_id();
-  bool use_tenant_primary_zone = !is_sys_tenant(tenant_id) && GCTX.is_standby_cluster();
   primary_zone.reset();
-  if (!use_tenant_primary_zone) {
-    const share::schema::ObSimpleTenantSchema *simple_tenant = nullptr;
-    if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, simple_tenant))) {
-      LOG_WARN("fail to get tenant info", K(ret), K(tenant_id));
-    } else if (OB_UNLIKELY(nullptr == simple_tenant)) {
-      ret = OB_TENANT_NOT_EXIST;
-      LOG_WARN("tenant schema ptr is null", K(ret), KPC(simple_tenant));
-    } else {
-      use_tenant_primary_zone = simple_tenant->is_restore();
-    }
-  }
-  if (OB_FAIL(ret)) {
-  } else if (use_tenant_primary_zone) {
-    const ObTenantSchema *tenant_schema = NULL;
-    if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, tenant_schema))) {
-      LOG_WARN("fail to get tenant schema", K(ret), K(database_id), K(tenant_id));
-    } else if (OB_UNLIKELY(NULL == tenant_schema)) {
-      ret = OB_ERR_UNEXPECTED;
-      LOG_WARN("tenant schema null", K(ret), K(database_id), K(tenant_id), KP(tenant_schema));
-    } else if (OB_FAIL(tenant_schema->get_primary_zone_inherit(schema_guard, primary_zone))) {
-      LOG_WARN("fail to get primary zone array", K(ret), K(database_id), K(tenant_id));
-    }
+  const ObTenantSchema *tenant_schema = NULL;
+  if (OB_FAIL(schema_guard.get_tenant_info(tenant_id, tenant_schema))) {
+    LOG_WARN("fail to get tenant schema", K(ret), K(tenant_id));
+  } else if (OB_UNLIKELY(NULL == tenant_schema)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("tenant schema null", K(ret), K(tenant_id), KP(tenant_schema));
+  } else if (OB_FAIL(tenant_schema->get_primary_zone_inherit(schema_guard, primary_zone))) {
+    LOG_WARN("fail to get primary zone array", K(ret), K(tenant_id));
   }
   return ret;
 }
@@ -595,7 +562,7 @@ bool ObSimpleTableSchemaV2::is_valid() const
         ret = false;
         LOG_WARN("invalid data table_id", K(ret), K(data_table_id_));
       } else if (is_index_table() && !is_normal_index() && !is_unique_index()
-          && !is_domain_index() && !is_fts_index() && !is_multivalue_index()) {
+          && !is_domain_index() && !is_vec_index() && !is_fts_index() && !is_multivalue_index()) {
         ret = false;
         LOG_WARN("table_type is not consistent with index_type",
             "table_type", static_cast<int64_t>(table_type_),
@@ -1035,24 +1002,8 @@ int ObSimpleTableSchemaV2::get_locality_str_inherit(
 {
   int ret = OB_SUCCESS;
   const uint64_t tenant_id = get_tenant_id();
-  bool use_tenant_locality = !is_sys_tenant(tenant_id) && GCTX.is_standby_cluster();
   locality_str = NULL;
-  if (OB_INVALID_ID == get_table_id()) {
-    ret = OB_INVALID_ARGUMENT;
-    LOG_WARN("invalid table_id", K(ret), K_(table_id));
-  } else if (!use_tenant_locality) {
-    const share::schema::ObSimpleTenantSchema *simple_tenant = nullptr;
-    if (OB_FAIL(guard.get_tenant_info(tenant_id, simple_tenant))) {
-      LOG_WARN("fail to get tenant info", K(ret), K(tenant_id));
-    } else if (OB_UNLIKELY(nullptr == simple_tenant)) {
-      ret = OB_TENANT_NOT_EXIST;
-      LOG_WARN("tenant schema ptr is null", K(ret), KPC(simple_tenant));
-    } else {
-      use_tenant_locality = simple_tenant->is_restore();
-    }
-  }
   if (OB_FAIL(ret)) {
-  } else if (!OB_ISNULL(locality_str) && !locality_str->empty()) {
   } else {
     const ObSimpleTenantSchema *tenant = NULL;
     if (OB_FAIL(guard.get_tenant_info(get_tenant_id(), tenant))) {
@@ -1475,6 +1426,7 @@ ObTableSchema::ObTableSchema(ObIAllocator *allocator)
     rls_context_ids_(SCHEMA_SMALL_MALLOC_BLOCK_SIZE, ModulePageAllocator(*allocator)),
     name_generated_type_(GENERATED_TYPE_UNKNOWN),
     lob_inrow_threshold_(OB_DEFAULT_LOB_INROW_THRESHOLD),
+    micro_index_clustered_(false),
     local_session_vars_(allocator),
     index_params_()
 {
@@ -1554,6 +1506,7 @@ int ObTableSchema::assign(const ObTableSchema &src_schema)
       auto_increment_cache_size_ = src_schema.auto_increment_cache_size_;
       is_column_store_supported_ = src_schema.is_column_store_supported_;
       max_used_column_group_id_ = src_schema.max_used_column_group_id_;
+      micro_index_clustered_ = src_schema.micro_index_clustered_;
       mlog_tid_ = src_schema.mlog_tid_;
       if (OB_FAIL(deep_copy_str(src_schema.tablegroup_name_, tablegroup_name_))) {
         LOG_WARN("Fail to deep copy tablegroup_name", K(ret));
@@ -1578,7 +1531,6 @@ int ObTableSchema::assign(const ObTableSchema &src_schema)
       } else if (OB_FAIL(deep_copy_str(src_schema.external_properties_, external_properties_))) {
         LOG_WARN("deep copy external_properties failed", K(ret));
       }
-
       //view schema
       if (OB_SUCC(ret)) {
         view_schema_ = src_schema.view_schema_;
@@ -3470,6 +3422,7 @@ void ObTableSchema::reset()
   name_hash_array_ = NULL;
   generated_columns_.reset();
   virtual_column_cnt_ = 0;
+  micro_index_clustered_ = false;
 
   cst_cnt_ = 0;
   cst_array_capacity_ = 0;
@@ -4682,6 +4635,13 @@ int ObTableSchema::check_alter_column_type(const ObColumnSchemaV2 &src_column,
         LOG_USER_ERROR(OB_NOT_SUPPORTED, err_msg);
       }
     }
+  } else if (src_column.is_collection()) {
+    bool is_same = false;
+    if (OB_FAIL(src_column.is_same_collection_column(dst_column, is_same))) {
+      LOG_WARN("failed to check whether is same collection cols", K(ret));
+    } else {
+      is_offline = !is_same;
+    }
   }
   return ret;
 }
@@ -4927,7 +4887,7 @@ int ObTableSchema::check_alter_column_in_index(const ObColumnSchemaV2 &src_colum
         }
       }
       if (OB_SUCC(ret) && is_in_index) {
-        if (ob_is_text_tc(dst_column.get_data_type())) {
+        if (!index_table_schema->is_vec_index() && ob_is_text_tc(dst_column.get_data_type())) {
           ret = OB_ERR_WRONG_KEY_COLUMN;
           LOG_USER_ERROR(OB_ERR_WRONG_KEY_COLUMN, dst_column.get_column_name_str().length(),
           dst_column.get_column_name_str().ptr());
@@ -5029,6 +4989,10 @@ int ObTableSchema::check_is_exactly_same_type(const ObColumnSchemaV2 &src_column
                   is_incremental) {
           is_same = true;
         }
+      }
+    } else if (src_column.is_collection()) {
+      if (OB_FAIL(src_column.is_same_collection_column(dst_column, is_same))) {
+        LOG_WARN("failed to check whether is same collection cols", K(ret));
       }
     } else {
       if (src_column.is_string_type() || src_column.is_raw()
@@ -6842,15 +6806,16 @@ OB_DEF_SERIALIZE(ObTableSchema)
 
   OB_UNIS_ENCODE(mlog_tid_);
   OB_UNIS_ENCODE(auto_increment_cache_size_);
-  OB_UNIS_ENCODE(local_session_vars_);
-  OB_UNIS_ENCODE(duplicate_read_consistency_);
   if (OB_SUCC(ret)) {
     LST_DO_CODE(OB_UNIS_ENCODE,
                 external_properties_);
   }
+  OB_UNIS_ENCODE(local_session_vars_);
+  OB_UNIS_ENCODE(duplicate_read_consistency_);
   if (OB_SUCC(ret)) {
     OB_UNIS_ENCODE(index_params_);
   }
+  OB_UNIS_ENCODE(micro_index_clustered_);
   return ret;
 }
 
@@ -6997,6 +6962,18 @@ bool ObTableSchema::has_lob_column() const
     }
   }
   return bool_ret;
+}
+
+int64_t ObTableSchema::get_lob_columns_count() const
+{
+  int64_t lob_cols_cnt = 0;
+  for (int64_t i = 0; i < column_cnt_; ++i) {
+    ObColumnSchemaV2& col = *column_array_[i];
+    if (is_lob_storage(col.get_data_type())) {
+      lob_cols_cnt++;
+    }
+  }
+  return lob_cols_cnt;
 }
 
 OB_DEF_DESERIALIZE(ObTableSchema)
@@ -7281,12 +7258,12 @@ OB_DEF_DESERIALIZE(ObTableSchema)
 
   OB_UNIS_DECODE(mlog_tid_);
   OB_UNIS_DECODE(auto_increment_cache_size_);
-  OB_UNIS_DECODE(local_session_vars_);
-  OB_UNIS_DECODE(duplicate_read_consistency_);
   if (OB_SUCC(ret)) {
     LST_DO_CODE(OB_UNIS_DECODE,
                 external_properties_);
   }
+  OB_UNIS_DECODE(local_session_vars_);
+  OB_UNIS_DECODE(duplicate_read_consistency_);
 
   if (OB_SUCC(ret)) {
     OB_UNIS_DECODE(index_params);
@@ -7294,6 +7271,7 @@ OB_DEF_DESERIALIZE(ObTableSchema)
       LOG_WARN("deep_copy_str failed", K(ret), K(index_params));
     }
   }
+  OB_UNIS_DECODE(micro_index_clustered_);
   return ret;
 }
 
@@ -7444,10 +7422,11 @@ OB_DEF_SERIALIZE_SIZE(ObTableSchema)
   OB_UNIS_ADD_LEN(max_used_column_group_id_);
   OB_UNIS_ADD_LEN(mlog_tid_);
   OB_UNIS_ADD_LEN(auto_increment_cache_size_);
+  OB_UNIS_ADD_LEN(external_properties_);
   OB_UNIS_ADD_LEN(local_session_vars_);
   OB_UNIS_ADD_LEN(duplicate_read_consistency_);
-  OB_UNIS_ADD_LEN(external_properties_);
   OB_UNIS_ADD_LEN(index_params_);
+  OB_UNIS_ADD_LEN(micro_index_clustered_);
   return len;
 }
 
@@ -8438,6 +8417,44 @@ int ObTableSchema::get_fulltext_column_ids(uint64_t &doc_id_col_id, uint64_t &ft
   return ret;
 }
 
+int ObTableSchema::get_vec_index_column_id(uint64_t &vec_vector_id) const
+{
+  int ret = OB_SUCCESS;
+  vec_vector_id = OB_INVALID_ID;
+  for (int64_t i = 0; OB_SUCC(ret) && OB_INVALID_ID == vec_vector_id && i < get_column_count(); ++i) {
+    const ObColumnSchemaV2 *column_schema = get_column_schema_by_idx(i);
+    if (OB_ISNULL(column_schema)) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("unexpected error, column schema is nullptr", K(ret), K(i), KPC(this));
+    } else if (column_schema->is_vec_vector_column()) {
+      vec_vector_id = column_schema->get_column_id();
+    }
+  }
+  if (OB_FAIL(ret) || OB_INVALID_ID == vec_vector_id) {
+    ret = ret != OB_SUCCESS ? ret : OB_ERR_INDEX_KEY_NOT_FOUND;
+  }
+  return ret;
+}
+
+int ObTableSchema::get_vec_index_vid_col_id(uint64_t &vec_id_col_id) const
+{
+  int ret = OB_SUCCESS;
+  vec_id_col_id = OB_INVALID_ID;
+  for (int64_t i = 0; OB_SUCC(ret) && OB_INVALID_ID == vec_id_col_id && i < get_column_count(); ++i) {
+    const ObColumnSchemaV2 *column_schema = get_column_schema_by_idx(i);
+    if (OB_ISNULL(column_schema)) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("unexpected error, column schema is nullptr", K(ret), K(i), KPC(this));
+    } else if (column_schema->is_vec_vid_column()) {
+      vec_id_col_id = column_schema->get_column_id();
+    }
+  }
+  if (OB_FAIL(ret) || OB_INVALID_ID == vec_id_col_id) {
+    ret = ret != OB_SUCCESS ? ret : OB_ERR_INDEX_KEY_NOT_FOUND;
+  }
+  return ret;
+}
+
 int ObTableSchema::get_rowkey_doc_tid(uint64_t &index_table_id) const
 {
   int ret = OB_SUCCESS;
@@ -8455,6 +8472,27 @@ int ObTableSchema::get_rowkey_doc_tid(uint64_t &index_table_id) const
   if (OB_SUCC(ret) && OB_UNLIKELY(OB_INVALID_ID == index_table_id)) {
     ret = OB_ERR_INDEX_KEY_NOT_FOUND;
     LOG_DEBUG("not found rowkey doc index", K(ret), K(simple_index_infos));
+  }
+  return ret;
+}
+
+int ObTableSchema::get_rowkey_vid_tid(uint64_t &index_table_id) const
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<ObAuxTableMetaInfo, 16> simple_index_infos;
+  index_table_id = OB_INVALID_ID;
+  if (OB_FAIL(get_simple_index_infos(simple_index_infos))) {
+    LOG_WARN("get simple_index_infos failed", K(ret));
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < simple_index_infos.count(); ++i) {
+    if (share::schema::is_vec_rowkey_vid_type(simple_index_infos.at(i).index_type_)) {
+      index_table_id = simple_index_infos.at(i).table_id_;
+      break;
+    }
+  }
+  if (OB_SUCC(ret) && OB_UNLIKELY(OB_INVALID_ID == index_table_id)) {
+    ret = OB_ERR_INDEX_KEY_NOT_FOUND;
+    LOG_DEBUG("not found rowkey vid index", K(ret), K(simple_index_infos));
   }
   return ret;
 }
@@ -8527,6 +8565,30 @@ int ObTableSchema::check_has_multivalue_index(ObSchemaGetterGuard &schema_guard,
       LOG_WARN("cannot get index table schema for table ", K(simple_index_infos.at(i).table_id_));
     } else if (index_schema->is_multivalue_index_aux()) {
       has_multivalue_index = true;
+      break;
+    }
+  }
+  return ret;
+}
+
+int ObTableSchema::check_has_vector_index(ObSchemaGetterGuard &schema_guard, bool &has_vector_index) const
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<ObAuxTableMetaInfo, 16> simple_index_infos;
+  const ObSimpleTableSchemaV2 *index_schema = NULL;
+  const uint64_t tenant_id = get_tenant_id();
+  has_vector_index = false;
+  if (OB_FAIL(get_simple_index_infos(simple_index_infos))) {
+    LOG_WARN("get simple_index_infos failed", K(ret));
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < simple_index_infos.count(); ++i) {
+    if (OB_FAIL(schema_guard.get_simple_table_schema(tenant_id, simple_index_infos.at(i).table_id_, index_schema))) {
+      LOG_WARN("failed to get table schema", K(ret), K(tenant_id), K(simple_index_infos.at(i).table_id_));
+    } else if (OB_ISNULL(index_schema)) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("cannot get index table schema for table ", K(simple_index_infos.at(i).table_id_));
+    } else if (index_schema->is_vec_index()) {
+      has_vector_index = true;
       break;
     }
   }
@@ -8958,14 +9020,17 @@ int ObTableSchema::is_column_group_exist(const ObString &cg_name, bool &exist) c
   return ret;
 }
 
-int ObTableSchema::get_column_group_index(const share::schema::ObColumnParam &param, int32_t &cg_idx) const
+int ObTableSchema::get_column_group_index(
+    const share::schema::ObColumnParam &param,
+    const bool need_calculate_cg_idx,
+    int32_t &cg_idx) const
 {
   int ret = OB_SUCCESS;
-  uint64_t column_id = param.get_column_id();
+  const uint64_t column_id = param.get_column_id();
   cg_idx = -1;
-  if (OB_UNLIKELY(1 >= column_group_cnt_)) {
+  if (OB_UNLIKELY(1 >= column_group_cnt_ && !need_calculate_cg_idx)) {
     ret = OB_ERR_UNEXPECTED;
-    LOG_WARN("No column group exist", K(ret), K_(is_column_store_supported), K_(column_group_cnt));
+    LOG_WARN("No column group exist", K(ret), K(need_calculate_cg_idx), K_(is_column_store_supported), K_(column_group_cnt));
   } else if (param.is_virtual_gen_col()) {
     cg_idx = -1;
   } else if (column_id < OB_END_RESERVED_COLUMN_ID_NUM &&
@@ -8974,7 +9039,9 @@ int ObTableSchema::get_column_group_index(const share::schema::ObColumnParam &pa
       common::OB_HIDDEN_PK_INCREMENT_COLUMN_ID != column_id) { // this has its own column group now
     if (common::OB_HIDDEN_TRANS_VERSION_COLUMN_ID == column_id ||
         common::OB_HIDDEN_SQL_SEQUENCE_COLUMN_ID == column_id) {
-      if (OB_FAIL(get_base_rowkey_column_group_index(cg_idx))) {
+      if (need_calculate_cg_idx) {
+        cg_idx = OB_CS_COLUMN_REPLICA_ROWKEY_CG_IDX;
+      } else if (OB_FAIL(get_base_rowkey_column_group_index(cg_idx))) {
         LOG_WARN("Fail to get base/rowkey column group index", K(ret), K(column_id));
       }
     } else {
@@ -8983,6 +9050,10 @@ int ObTableSchema::get_column_group_index(const share::schema::ObColumnParam &pa
       // common::OB_HIDDEN_LOGICAL_ROWID_COLUMN_ID == column_id
       // common::OB_HIDDEN_GROUP_IDX_COLUMN_ID == column_id
       cg_idx = -1;
+    }
+  } else if (need_calculate_cg_idx) {
+    if (OB_FAIL(calc_column_group_index_(column_id, cg_idx))) {
+      LOG_WARN("Fail to calc_column_group_index", K(ret), K(column_id));
     }
   } else {
     bool found = false;
@@ -9018,6 +9089,29 @@ int ObTableSchema::get_column_group_index(const share::schema::ObColumnParam &pa
       LOG_WARN("Unexpected, can not find cg idx", K(ret), K(column_id));
     }
   }
+  LOG_TRACE("[CS-Replica] get column group index", K(ret), K(need_calculate_cg_idx), K(cg_idx));
+  return ret;
+}
+
+int ObTableSchema::calc_column_group_index_(const uint64_t column_id, int32_t &cg_idx) const
+{
+  int ret = OB_SUCCESS;
+  cg_idx = -1;
+  // for cs replica, constructed cg schemas start with rowkey cg so the cg idx of row key cg is ALWAYS 0
+  // and cg idx of normal cg is shifted by offset 1.
+  for (int64_t i = 0; i < column_cnt_; i++) {
+    ObColumnSchemaV2 *column = column_array_[i];
+    if (OB_NOT_NULL(column) && column->get_column_id() == column_id) {
+      cg_idx = i + 1;
+      break;
+    }
+  }
+
+  if (OB_UNLIKELY(-1 == cg_idx)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("Unexpected cg idx", K(ret));
+  }
+
   return ret;
 }
 
@@ -9250,6 +9344,22 @@ int ObTableSchema::get_doc_id_rowkey_tid(uint64_t &doc_id_rowkey_tid) const
     }
   }
   if (OB_INVALID_ID == doc_id_rowkey_tid) {
+    ret = OB_ERR_FT_COLUMN_NOT_INDEXED;
+  }
+  return ret;
+}
+
+int ObTableSchema::get_vec_id_rowkey_tid(uint64_t &vec_id_rowkey_tid) const
+{
+  int ret = OB_SUCCESS;
+  vec_id_rowkey_tid = OB_INVALID_ID;
+  for (int64_t i = 0; OB_SUCC(ret) && i < simple_index_infos_.count(); ++i) {
+    if (share::schema::is_vec_vid_rowkey_type(simple_index_infos_.at(i).index_type_)) {
+      vec_id_rowkey_tid = simple_index_infos_.at(i).table_id_;
+      break;
+    }
+  }
+  if (OB_INVALID_ID == vec_id_rowkey_tid) {
     ret = OB_ERR_FT_COLUMN_NOT_INDEXED;
   }
   return ret;

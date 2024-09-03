@@ -25,6 +25,7 @@
 #include "sql/engine/sort/ob_sort_key_fetcher_vec_op.h"
 #include "sql/engine/sort/ob_sort_vec_op_eager_filter.h"
 #include "sql/engine/sort/ob_sort_vec_op_store_row_factory.h"
+#include "sql/engine/expr/ob_array_expr_utils.h"
 #include "observer/omt/ob_tenant_config_mgr.h"
 #include "sql/engine/sort/ob_pd_topn_sort_filter.h"
 
@@ -241,6 +242,7 @@ protected:
   // if row is null will alloc new memory, otherwise reuse in place if memory is
   // enough. ensure row pointer not change when an error occurs.
   int copy_to_row(const common::ObIArray<ObExpr *> &exprs, const RowMeta &row_meta,
+                  bool is_sort_key,
                   Store_Row *&row);
   int copy_to_row(Store_Row *&sk_row);
   int generate_last_ties_row(const Store_Row *orign_row);

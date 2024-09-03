@@ -16,6 +16,7 @@
 #include "ob_physical_copy_task.h"
 #include "share/rc/ob_tenant_base.h"
 #include "share/scheduler/ob_dag_warning_history_mgr.h"
+#include "share/backup/ob_backup_connectivity.h"
 #include "storage/backup/ob_backup_data_store.h"
 #include "storage/tx_storage/ob_ls_service.h"
 #include "storage/high_availability/ob_storage_ha_reader.h"
@@ -189,6 +190,7 @@ int ObLSRestoreDagNet::init_by_param(const ObIDagInitParam *param)
     backup::ObBackupIndexStoreParam index_store_param;
     storage::ObBackupDataStore store;
     int64_t retry_id = 0;
+    int64_t dest_id = 0;
     if (OB_FAIL(store.init(init_param->arg_.restore_base_info_.backup_dest_))) {
       LOG_WARN("fail to init mgr", K(ret));
     } else if (OB_FAIL(store.read_backup_set_info(backup_set_file_desc))) {
@@ -204,9 +206,13 @@ int ObLSRestoreDagNet::init_by_param(const ObIDagInitParam *param)
       index_store_param.backup_data_type_ = data_type;
       index_store_param.turn_id_ = init_param->arg_.ls_id_.is_sys_ls() ?
                                    1/*sys ls only has one turn*/ : backup_set_file_desc.backup_set_file_.meta_turn_id_;
+      const ObBackupDestType::TYPE backup_dest_type = ObBackupDestType::DEST_TYPE_RESTORE_DATA;
 
       ObBackupPath backup_path;
-      if (OB_FAIL(ObBackupPathUtil::get_ls_backup_dir_path(
+      if (OB_FAIL(share::ObBackupStorageInfoOperator::get_restore_dest_id(
+          *GCTX.sql_proxy_, MTL_ID(), backup_dest_type, index_store_param.dest_id_))) {
+        LOG_WARN("failed to get restore dest id", K(ret));
+      } else if (OB_FAIL(ObBackupPathUtil::get_ls_backup_dir_path(
           init_param->arg_.restore_base_info_.backup_dest_, init_param->arg_.ls_id_, backup_path))) {
         LOG_WARN("failed to get ls backup dir path", K(ret), KPC(init_param));
       } else if (OB_FAIL(store.get_max_sys_ls_retry_id(backup_path, init_param->arg_.ls_id_, index_store_param.turn_id_, retry_id))) {
@@ -1353,10 +1359,17 @@ int ObSysTabletsRestoreTask::process()
 int ObSysTabletsRestoreTask::create_or_update_tablets_()
 {
   int ret = OB_SUCCESS;
+  ObIDagNet *dag_net = nullptr;
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_WARN("sys tablets restore task do not init", K(ret));
-  } else if (OB_FAIL(ha_tablets_builder_.create_or_update_tablets())) {
+  } else if (OB_ISNULL(this->get_dag())) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("dag should not be nullptr", K(ret), KP(this->get_dag()));
+  } else if (OB_ISNULL(dag_net = this->get_dag()->get_dag_net())) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("dag net should not be nullptr", K(ret), KP(dag_net));
+  } else if (OB_FAIL(ha_tablets_builder_.create_or_update_tablets(dag_net))) {
     LOG_WARN("failed to create or update tablets", K(ret), KPC(ctx_));
   }
   return ret;
@@ -1365,11 +1378,17 @@ int ObSysTabletsRestoreTask::create_or_update_tablets_()
 int ObSysTabletsRestoreTask::build_tablets_sstable_info_()
 {
   int ret = OB_SUCCESS;
-
+  ObIDagNet *dag_net = nullptr;
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_WARN("sys tablets restore task do not init", K(ret), KPC(ctx_));
-  } else if (OB_FAIL(ha_tablets_builder_.build_tablets_sstable_info())) {
+  } else if (OB_ISNULL(this->get_dag())) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("dag should not be nullptr", K(ret), KP(this->get_dag()));
+  } else if (OB_ISNULL(dag_net = this->get_dag()->get_dag_net())) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("dag net should not be nullptr", K(ret), KP(dag_net));
+  } else if (OB_FAIL(ha_tablets_builder_.build_tablets_sstable_info(dag_net))) {
     LOG_WARN("failed to build tablets sstable info", K(ret), KPC(ctx_));
   }
   return ret;

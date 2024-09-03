@@ -424,6 +424,7 @@ int ObDelUpdStmt::deep_copy_stmt_struct(ObIAllocator &allocator,
     ignore_ = other.ignore_;
     has_global_index_ = other.has_global_index_;
     has_instead_of_trigger_ = other.has_instead_of_trigger_;
+    dml_source_from_join_ = other.dml_source_from_join_;
     pdml_disabled_ = other.pdml_disabled_;
   }
   return ret;
@@ -449,6 +450,7 @@ int ObDelUpdStmt::assign(const ObDelUpdStmt &other)
     has_global_index_ = other.has_global_index_;
     has_instead_of_trigger_ = other.has_instead_of_trigger_;
     ab_stmt_id_expr_ = other.ab_stmt_id_expr_;
+    dml_source_from_join_ = other.dml_source_from_join_;
     pdml_disabled_ = other.pdml_disabled_;
   }
   return ret;
@@ -548,10 +550,11 @@ int ObDelUpdStmt::update_base_tid_cid()
             LOG_WARN("get unexpected null", K(col), K(ret));
           } else {
             const bool is_rowkey_doc = col->get_table_name().suffix_match("rowkey_doc");
+            const bool is_rowkey_vid = col->get_table_name().suffix_match("rowkey_vid_table");
             col_item->base_tid_ = col->get_table_id();
             col_item->base_cid_ = col->get_column_id();
             if (OB_UNLIKELY(col_item->base_tid_ == OB_INVALID_ID) ||
-            OB_UNLIKELY(j != 0 && col_item->base_tid_ != base_tid && !is_rowkey_doc)) {
+            OB_UNLIKELY(j != 0 && col_item->base_tid_ != base_tid && !is_rowkey_doc && !is_rowkey_vid)) {
               ret = OB_ERR_UNEXPECTED;
               LOG_WARN("base table id is invalid", K(ret), K(col_item->base_tid_), K(base_tid));
             } else if (j == 0) {
@@ -755,6 +758,30 @@ int ObDelUpdStmt::check_dml_source_from_join()
     // do nothing
   } else {
     set_dml_source_from_join(true);
+  }
+  return ret;
+}
+
+int ObDelUpdStmt::get_modified_materialized_view_id(uint64_t &mview_id) const
+{
+  int ret = OB_SUCCESS;
+  mview_id = OB_INVALID_ID;
+  const ObIArray<TableItem*> &tables = get_table_items();
+  const TableItem *table_item = NULL;
+  bool is_modified = false;
+  for (int64_t i = 0; OB_INVALID_ID == mview_id && OB_SUCC(ret) && i < tables.count(); ++i) {
+    if (OB_ISNULL(table_item = tables.at(i))) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("unexpect null", K(ret), K(table_item));
+    } else if (MATERIALIZED_VIEW != table_item->table_type_) {
+      /* do nothing */
+    } else if (OB_FAIL(check_table_be_modified(table_item->ref_id_, is_modified))) {
+      LOG_WARN("fail to check table be modified", K(ret));
+    } else if (!is_modified) {
+      /* do nothing */
+    } else {
+      mview_id = table_item->mview_id_;
+    }
   }
   return ret;
 }

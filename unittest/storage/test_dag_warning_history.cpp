@@ -17,7 +17,7 @@
 
 #include "share/scheduler/ob_dag_warning_history_mgr.h"
 #include "share/scheduler/ob_tenant_dag_scheduler.h"
-#include "storage/ob_sstable_struct.h"
+#include "storage/compaction/ob_sstable_merge_history.h"
 #include "observer/omt/ob_tenant_node_balancer.h"
 
 namespace oceanbase
@@ -186,11 +186,11 @@ TEST_F(TestDagWarningHistory, simple_add)
 
   compaction::ObInfoParamBuffer allocator;
   ObDagWarningInfo ret_info;
-  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START+1, &ret_info, allocator);
+  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START+1, ret_info, allocator);
   ASSERT_EQ(OB_HASH_NOT_EXIST, ret);
 
   allocator.reuse();
-  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, &ret_info, allocator);
+  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, ret_info, allocator);
   ASSERT_EQ(OB_SUCCESS, ret);
   ASSERT_EQ(TRUE, ret_info.dag_ret_ == ObBasicDag::DAG_RET_START);
   STORAGE_LOG(DEBUG, "", K(ret_info));
@@ -198,7 +198,7 @@ TEST_F(TestDagWarningHistory, simple_add)
   char comment[common::OB_DAG_WARNING_INFO_LENGTH];
   memset(comment, '\0', sizeof(comment));
   allocator.reuse();
-  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, &ret_info, allocator);
+  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, ret_info, allocator);
   ASSERT_EQ(OB_SUCCESS, ret);
   ASSERT_EQ (TRUE, ret_info.dag_ret_ == ObBasicDag::DAG_RET_START);
   memset(comment, '\0', sizeof(comment));
@@ -226,7 +226,7 @@ TEST_F(TestDagWarningHistory, simple_del)
 
   compaction::ObInfoParamBuffer allocator;
   ObDagWarningInfo ret_info;
-  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, &ret_info, allocator);
+  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, ret_info, allocator);
   ASSERT_EQ(OB_HASH_NOT_EXIST, ret);
 
   ASSERT_EQ(OB_SUCCESS, MTL(ObDagWarningHistoryManager *)->add_dag_warning_info(&dag));
@@ -239,7 +239,7 @@ TEST_F(TestDagWarningHistory, simple_del)
   ASSERT_EQ(OB_ITER_END, iterator.get_next(&ret_info, nullptr, 0));
 
   allocator.reuse();
-  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, &ret_info, allocator);
+  ret = MTL(ObDagWarningHistoryManager *)->get_with_param(ObBasicDag::KEY_START, ret_info, allocator);
   ASSERT_EQ(OB_HASH_NOT_EXIST, ret);
 }
 

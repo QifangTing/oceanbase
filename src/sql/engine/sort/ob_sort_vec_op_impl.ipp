@@ -81,8 +81,10 @@ void ObSortVecOpImpl<Compare, Store_Row, has_addon>::reset()
     }
     if (nullptr != topn_heap_) {
       for (int64_t i = 0; i < topn_heap_->count(); ++i) {
-        store_row_factory_.free_row_store(topn_heap_->at(i));
-        topn_heap_->at(i) = nullptr;
+        if (OB_NOT_NULL(topn_heap_->at(i))) {
+          store_row_factory_.free_row_store(topn_heap_->at(i));
+          topn_heap_->at(i) = nullptr;
+        }
       }
       topn_heap_->~TopnHeap();
       mem_context_->get_malloc_allocator().free(topn_heap_);
@@ -143,8 +145,10 @@ void ObSortVecOpImpl<Compare, Store_Row, has_addon>::reuse()
   }
   if (nullptr != topn_heap_) {
     for (int64_t i = 0; i < topn_heap_->count(); ++i) {
-      store_row_factory_.free_row_store(topn_heap_->at(i));
-      topn_heap_->at(i) = nullptr;
+      if (OB_NOT_NULL(topn_heap_->at(i))) {
+        store_row_factory_.free_row_store(topn_heap_->at(i));
+        topn_heap_->at(i) = nullptr;
+      }
     }
     topn_heap_->reset();
   }
@@ -271,9 +275,9 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::init(ObSortVecOpContext &ctx
     addon_collations_ = ctx.addon_collations_;
     sk_collations_ = ctx.prefix_pos_ > 0 ? ctx.base_sk_collations_ : ctx.sk_collations_;
     sk_exprs_ = ctx.sk_exprs_;
-    addon_exprs_ = ctx.addon_exprs_;
-    cmp_sk_exprs_ = enable_encode_sortkey_ ? addon_exprs_ : sk_exprs_;
-    cmp_sort_collations_ = enable_encode_sortkey_ ? addon_collations_ : sk_collations_;
+    addon_exprs_ = has_addon ? ctx.addon_exprs_ : nullptr;
+    cmp_sk_exprs_ = (enable_encode_sortkey_  && has_addon) ? addon_exprs_ : sk_exprs_;
+    cmp_sort_collations_ = (enable_encode_sortkey_  && has_addon) ? addon_collations_ : sk_collations_;
     eval_ctx_ = ctx.eval_ctx_;
     exec_ctx_ = ctx.exec_ctx_;
     part_cnt_ = ctx.part_cnt_;
@@ -518,7 +522,9 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::build_row(
   for (int64_t i = 0; i < exprs.count() && OB_SUCC(ret); ++i) {
     ObExpr *expr = exprs.at(i);
     ObIVector *vec = expr->get_vector(ctx);
-    if (OB_FAIL(vec->to_row(row_meta, stored_row, batch_idx, i))) {
+    if (expr->is_nested_expr() && !is_uniform_format(vec->get_format())) {
+      OZ(ObCompactRow::nested_vec_to_row(*expr, ctx, row_meta, stored_row, batch_idx, i));
+    } else if (OB_FAIL(vec->to_row(row_meta, stored_row, batch_idx, i))) {
       SQL_ENG_LOG(WARN, "failed to to row", K(ret), K(expr));
     }
   }
@@ -574,6 +580,7 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::copy_to_topn_row(Store_Row *
   int ret = OB_SUCCESS;
   Store_Row *top_row = topn_heap_->top();
   if (OB_FAIL(copy_to_row(top_row))) {
+    topn_heap_->top() = top_row;
     SQL_ENG_LOG(WARN, "failed to copy to row", K(ret));
   } else {
     new_row = top_row;
@@ -688,17 +695,38 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::copy_to_row(Store_Row *&sk_r
 {
   int ret = OB_SUCCESS;
   Store_Row *addon_row = nullptr;
+  Store_Row *reclaim_addon_row = nullptr;
+  Store_Row *reclaim_reuse_row = sk_row;
   if (nullptr != sk_row && has_addon) {
     addon_row = sk_row->get_addon_ptr(*sk_row_meta_);
+    reclaim_addon_row = sk_row->get_addon_ptr(*sk_row_meta_);
   }
-  if (OB_FAIL(copy_to_row(*sk_exprs_, *sk_row_meta_, sk_row))) {
+  if (OB_FAIL(copy_to_row(*sk_exprs_, *sk_row_meta_, true, sk_row))) {
     SQL_ENG_LOG(WARN, "failed to copy to row", K(ret));
   } else if (has_addon) {
-    if (OB_FAIL(copy_to_row(*addon_exprs_, *addon_row_meta_, addon_row))) {
+    if (OB_FAIL(copy_to_row(*addon_exprs_, *addon_row_meta_, false, addon_row))) {
       store_row_factory_.free_row_store(*sk_row_meta_, sk_row);
       SQL_ENG_LOG(WARN, "failed to copy to row", K(ret));
     } else {
       sk_row->set_addon_ptr(addon_row, *sk_row_meta_);
+    }
+  }
+  if (OB_FAIL(ret)) {
+    if (sk_row == reclaim_reuse_row) {
+      store_row_factory_.free_row_store(*sk_row_meta_, sk_row);
+      sk_row = nullptr;
+    }
+    if (has_addon && reclaim_addon_row == addon_row) {
+      store_row_factory_.free_row_store(*addon_row_meta_, addon_row);
+      addon_row = nullptr;
+    }
+    if (sk_row != nullptr) {
+      store_row_factory_.free_row_store(*sk_row_meta_, sk_row);
+      sk_row = nullptr;
+    }
+    if (has_addon && addon_row != nullptr) {
+      store_row_factory_.free_row_store(*addon_row_meta_, addon_row);
+      addon_row = nullptr;
     }
   }
   return ret;
@@ -786,8 +814,13 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::attach_rows(const ObExprPtrI
     } else if (OB_FAIL(exprs.at(col_idx)->init_vector_default(ctx, read_rows))) {
       LOG_WARN("fail to init vector", K(ret));
     } else {
+      ObExpr *e = exprs.at(col_idx);
       ObIVector *vec = exprs.at(col_idx)->get_vector(ctx);
-      if (VEC_UNIFORM_CONST != vec->get_format()) {
+      if (e->is_nested_expr() && !is_uniform_format(vec->get_format())) {
+        if (OB_FAIL(ObArrayExprUtils::nested_expr_from_rows(*e, ctx, row_meta, srows, read_rows, col_idx))) {
+          LOG_WARN("fail to do nested expr from rows", K(ret));
+        }
+      } else if (VEC_UNIFORM_CONST != vec->get_format()) {
         ret = vec->from_rows(row_meta, srows, read_rows, col_idx);
         exprs.at(col_idx)->set_evaluated_projected(ctx);
       }
@@ -867,7 +900,7 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::add_sort_batch_row(const uin
 // if row space is enough reuse the space, else use the alloc get new space.
 template <typename Compare, typename Store_Row, bool has_addon>
 int ObSortVecOpImpl<Compare, Store_Row, has_addon>::copy_to_row(
-  const common::ObIArray<ObExpr *> &exprs, const RowMeta &row_meta, Store_Row *&row)
+  const common::ObIArray<ObExpr *> &exprs, const RowMeta &row_meta, bool is_sort_key, Store_Row *&row)
 {
   int ret = OB_SUCCESS;
   char *buf = nullptr;
@@ -907,6 +940,9 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::copy_to_row(
       }
     } else {
       row = dst;
+      if (has_addon && is_sort_key) {
+        row->set_addon_ptr(nullptr, row_meta);
+      }
       row->set_max_size(buffer_len, row_meta);
     }
   }
@@ -915,6 +951,9 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::copy_to_row(
     inmem_row_size_ -= reclaim_row->get_max_size(row_meta);
     allocator_.free(reclaim_row);
     reclaim_row = nullptr;
+  }
+  if (OB_FAIL(ret)) {
+    row = nullptr;
   }
   return ret;
 }
@@ -1576,8 +1615,10 @@ int ObSortVecOpImpl<Compare, Store_Row, has_addon>::do_dump()
     if (OB_SUCC(ret) && use_heap_sort_) {
       if (nullptr != mem_context_ && nullptr != topn_heap_) {
         for (int64_t i = 0; i < topn_heap_->count(); ++i) {
-          store_row_factory_.free_row_store(topn_heap_->at(i));
-          topn_heap_->at(i) = nullptr;
+          if (OB_NOT_NULL(topn_heap_->at(i))) {
+            store_row_factory_.free_row_store(topn_heap_->at(i));
+            topn_heap_->at(i) = nullptr;
+          }
         }
         topn_heap_->~TopnHeap();
         mem_context_->get_malloc_allocator().free(topn_heap_);

@@ -245,12 +245,13 @@ private:
   int check_ls_need_copy_data_(bool &need_copy);
   int check_before_ls_migrate_(const ObLSMeta &ls_meta);
   int build_ls_();
-  int inner_build_ls_();
+  int inner_build_ls_(bool &is_rpc_not_support);
   int create_all_tablets_(ObCopyLSViewInfoObReader *ob_reader);
   int inner_build_ls_with_old_rpc_();
   int create_all_tablets_with_4_1_rpc_();
 
   int record_server_event_();
+  int join_learner_list_();
 
 private:
   bool is_inited_;
@@ -306,6 +307,12 @@ private:
 class ObTabletMigrationDag : public ObMigrationDag
 {
 public:
+  enum class ObTabletType {
+    SYS_TABLET_TYPE  = 0,  // sys tablet is unnecessary to processed in cs replica
+    DATA_TABLET_TYPE = 1,  // only data tablet has ObHATabletGroupCOConvertCtx
+    MAX_TYPE
+  };
+public:
   ObTabletMigrationDag();
   virtual ~ObTabletMigrationDag();
   virtual bool operator == (const share::ObIDag &other) const override;
@@ -319,15 +326,19 @@ public:
       const common::ObTabletID &tablet_id,
       ObTabletHandle &tablet_handle,
       share::ObIDagNet *dag_net,
-      ObHATabletGroupCtx *tablet_group_ctx = nullptr);
+      ObHATabletGroupCtx *tablet_group_ctx = nullptr,
+      ObTabletType tablet_type = ObTabletType::SYS_TABLET_TYPE);
+  int get_tablet_group_ctx(ObHATabletGroupCtx *&tablet_group_ctx);
+  int check_is_migrate_data_tablet(bool &is_migrate_data_tablet);
   int get_ls(ObLS *&ls);
-  INHERIT_TO_STRING_KV("ObIMigrationDag", ObMigrationDag, KP(this), K(copy_tablet_ctx_));
+  INHERIT_TO_STRING_KV("ObIMigrationDag", ObMigrationDag, KP(this), K(copy_tablet_ctx_), K(tablet_type_));
 
 protected:
   bool is_inited_;
   ObLSHandle ls_handle_;
   ObCopyTabletCtx copy_tablet_ctx_;
   ObHATabletGroupCtx *tablet_group_ctx_;
+  ObTabletType tablet_type_;
   DISALLOW_COPY_AND_ASSIGN(ObTabletMigrationDag);
 };
 
@@ -377,6 +388,7 @@ private:
       bool &need_copy);
   int check_transfer_seq_equal_(
       const ObMigrationTabletParam *src_tablet_meta);
+
   int generate_mds_copy_tasks_(
       ObTabletCopyFinishTask *tablet_copy_finish_task,
       share::ObITask *&parent_task);
@@ -395,6 +407,7 @@ private:
   DISALLOW_COPY_AND_ASSIGN(ObTabletMigrationTask);
 };
 
+class ObHATabletGroupCOConvertCtx;
 class ObTabletFinishMigrationTask final : public share::ObITask
 {
 public:
@@ -406,6 +419,10 @@ public:
   VIRTUAL_TO_STRING_KV(K("ObTabletFinishMigrationTask"), KP(this), KPC(ha_dag_net_ctx_), KPC(copy_tablet_ctx_), KPC(ls_));
 private:
   int update_data_and_expected_status_();
+  // handle cs replica
+  int prepare_co_convert_ctx(bool &is_migrate_data_tablet, ObHATabletGroupCOConvertCtx *&group_convert_ctx);
+  int update_co_convert_status_for_cs_replica(const bool tablet_is_deleted);
+  void schedule_convert_co_merge(ObHATabletGroupCOConvertCtx *group_convert_ctx);
 private:
   bool is_inited_;
   int64_t task_gen_time_;
@@ -443,7 +460,6 @@ public:
   virtual int process() override;
   VIRTUAL_TO_STRING_KV(K("ObDataTabletsMigrationTask"), KP(this), KPC(ctx_));
 private:
-  int join_learner_list_();
   int ls_online_();
   int generate_tablet_group_migration_dag_();
   int generate_tablet_group_dag_(
@@ -451,6 +467,8 @@ private:
       common::ObIArray<ObTabletGroupMigrationDag *> &tablet_group_dag_array);
   int build_tablet_group_info_();
   int generate_tablet_group_dag_();
+  int generate_check_co_convert_dag_if_needed();
+  int inner_generate_check_co_convert_dag(ObLS *ls);
   int try_remove_unneeded_tablets_();
   int try_offline_ls_();
   int record_server_event_();

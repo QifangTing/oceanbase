@@ -24,7 +24,8 @@
 #include "storage/blocksstable/ob_logic_macro_id.h"
 #include "share/ls/ob_ls_i_life_manager.h"
 #include "share/scheduler/ob_dag_scheduler_config.h"
-
+#include "share/rebuild_tablet/ob_rebuild_tablet_location.h"
+#include "common/ob_learner_list.h"
 
 namespace oceanbase
 {
@@ -379,6 +380,7 @@ public:
     NONE = 0,
     CLOG = 1,
     TRANSFER = 2,
+    TABLET = 3,
     MAX
   };
 
@@ -401,6 +403,47 @@ private:
   TYPE type_;
 };
 
+struct ObRebuildTabletIDArray final
+{
+  OB_UNIS_VERSION(1);
+public:
+  ObRebuildTabletIDArray();
+  ~ObRebuildTabletIDArray();
+  int assign(const common::ObIArray<common::ObTabletID> &tablet_id_array);
+  int assign(const ObRebuildTabletIDArray&tablet_id_array);
+  int push_back(const common::ObTabletID &tablet_id);
+  int get_tablet_id_array(common::ObIArray<common::ObTabletID> &tablet_id_array);
+
+  inline const common::ObTabletID &at(int64_t idx) const
+  {
+    OB_ASSERT(idx >= 0 && idx < count_);
+    return id_array_[idx];
+  }
+  inline common::ObTabletID &at(int64_t idx)
+  {
+    OB_ASSERT(idx >= 0 && idx < count_);
+    return id_array_[idx];
+  }
+  inline int64_t count() const { return count_; }
+  inline bool empty() const { return 0 == count(); }
+  void reset() { count_ = 0; }
+
+  int64_t to_string(char* buf, const int64_t buf_len) const
+  {
+    int64_t pos = 0;
+    J_OBJ_START();
+    J_NAME("id_array");
+    J_COLON();
+    (void)databuff_print_obj_array(buf, buf_len, pos, id_array_, count_);
+    J_OBJ_END();
+    return pos;
+  }
+private:
+  static const int64_t MAX_TABLET_COUNT = 64;
+  int64_t count_;
+  common::ObTabletID id_array_[MAX_TABLET_COUNT];
+};
+
 struct ObLSRebuildInfo final
 {
   OB_UNIS_VERSION(1);
@@ -411,10 +454,13 @@ public:
   bool is_valid() const;
   bool is_in_rebuild() const;
   bool operator ==(const ObLSRebuildInfo &other) const;
+  int assign(const ObLSRebuildInfo &info);
 
-  TO_STRING_KV(K_(status), K_(type));
+  TO_STRING_KV(K_(status), K_(type), K_(tablet_id_array), K_(src));
   ObLSRebuildStatus status_;
   ObLSRebuildType type_;
+  ObRebuildTabletIDArray tablet_id_array_;
+  share::ObRebuildTabletLocation src_;
 };
 
 struct ObTabletBackfillInfo final
@@ -511,7 +557,41 @@ public:
   int64_t transfer_seq_;
 };
 
+struct ObLSMemberListInfo final
+{
+public:
+  ObLSMemberListInfo();
+  ~ObLSMemberListInfo() = default;
+  void reset();
+  bool is_valid() const;
+  int assign(const ObLSMemberListInfo &info);
 
+  TO_STRING_KV(K_(learner_list), K_(leader_addr), K_(member_list));
+  common::GlobalLearnerList learner_list_;
+  common::ObAddr leader_addr_;
+  common::ObArray<common::ObAddr> member_list_;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObLSMemberListInfo);
+};
+
+struct ObMigrationChooseSrcHelperInitParam final
+{
+public:
+  ObMigrationChooseSrcHelperInitParam();
+  ~ObMigrationChooseSrcHelperInitParam() = default;
+  void reset();
+  bool is_valid() const;
+  int assign(const ObMigrationChooseSrcHelperInitParam &param);
+
+  TO_STRING_KV(K_(tenant_id), K_(ls_id), K_(local_clog_checkpoint_scn), K_(arg), K_(info));
+  uint64_t tenant_id_;
+  share::ObLSID ls_id_;
+  share::SCN local_clog_checkpoint_scn_;
+  ObMigrationOpArg arg_;
+  ObLSMemberListInfo info_;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObMigrationChooseSrcHelperInitParam);
+};
 }
 }
 #endif

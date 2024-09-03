@@ -178,6 +178,27 @@ const int64_t OB_MAX_LS_FLAG_LENGTH = 2048;
 const int64_t ESTIMATE_PS_RESERVE_TIME = 100 * 1000;
 const uint64_t MAX_STMT_TYPE_NAME_LENGTH = 128;
 
+const int64_t USER_RESOURCE_GROUP_START_ID = 10000;
+const uint64_t OBCG_DEFAULT_GROUP_ID = 0;
+const uint64_t USER_RESOURCE_OTHER_GROUP_ID = 0;
+const uint64_t OB_INVALID_GROUP_ID = UINT64_MAX;
+
+OB_INLINE bool is_valid_group(const uint64_t group_id)
+{
+  return group_id >= USER_RESOURCE_OTHER_GROUP_ID && group_id != OB_INVALID_GROUP_ID;
+}
+
+OB_INLINE bool is_user_group(const uint64_t group_id)
+{
+  return group_id >= USER_RESOURCE_GROUP_START_ID && group_id != OB_INVALID_GROUP_ID;
+}
+
+OB_INLINE bool is_valid_resource_group(const uint64_t group_id)
+{
+  //other group or user group
+  return group_id == USER_RESOURCE_OTHER_GROUP_ID || is_user_group(group_id);
+}
+
 // See ObDeviceHealthStatus for more information
 const int64_t OB_MAX_DEVICE_HEALTH_STATUS_STR_LENGTH = 20;
 
@@ -351,6 +372,8 @@ const int64_t OB_MAX_PASSWORD_LENGTH = 128;
 const int64_t OB_MAX_PASSWORD_BUF_LENGTH = OB_MAX_PASSWORD_LENGTH + 1;
 // After each sha1 is 41 characters, the incremental backup is up to 64 times, and the maximum password required for recovery is 64*(41+1)=2,688
 const int64_t OB_MAX_ENCRYPTED_PASSWORD_LENGTH = OB_MAX_PASSWORD_LENGTH * 4;
+const int64_t OB_MAX_EXTERNAL_TABLE_PROPERTIES_ITEM_LENGTH = 128;
+const int64_t OB_MAX_ENCRYPTED_EXTERNAL_TABLE_PROPERTIES_ITEM_LENGTH = OB_MAX_EXTERNAL_TABLE_PROPERTIES_ITEM_LENGTH * 4;
 const int64_t OB_MAX_PASSWORD_ARRAY_LENGTH = 4096;
 const int64_t OB_MAX_ERROR_MSG_LEN = 512;
 const int64_t OB_MAX_RESULT_MESSAGE_LENGTH = 1024;
@@ -388,6 +411,7 @@ const int64_t OB_MAX_DIRECTORY_NAME_LENGTH = 128; // Compatible with Oracle
 const int64_t OB_MAX_DIRECTORY_PATH_LENGTH = 4000; // Compatible with Oracle
 const uint64_t OB_MAX_INTERVAL_PARTITIONS = 1048575; // interval parted table max partitions
 const int64_t OB_MAX_BALANCE_GROUP_NAME_LENGTH = 512;
+const int64_t OB_SERVICE_NAME_LENGTH = 64;
 
 //plan cache
 const int64_t OB_PC_NOT_PARAM_COUNT = 8;
@@ -423,7 +447,7 @@ const int64_t OB_SCHEMA_START_VERSION = 100;
 const int64_t OB_SYS_PARAM_ROW_KEY_LENGTH = 192;
 const int64_t OB_MAX_SYS_PARAM_NAME_LENGTH = 128;
 const int64_t OB_MAX_SYS_PARAM_VALUE_LENGTH = 1024;
-const int64_t OB_MAX_SYS_PARAM_NUM = 600;
+const int64_t OB_MAX_SYS_PARAM_NUM = 700;
 const int64_t OB_MAX_PREPARE_STMT_NUM_PER_SESSION = 512;
 const uint32_t INVALID_SESSID = UINT32_MAX;
 const int64_t OB_MAX_VAR_NUM_PER_SESSION = 1024;
@@ -669,6 +693,14 @@ const char *const OB_PARTITION_SHARDING_NONE = "NONE";
 const char *const OB_PARTITION_SHARDING_PARTITION = "PARTITION";
 const char *const OB_PARTITION_SHARDING_ADAPTIVE = "ADAPTIVE";
 
+// vector index search
+const char *const OB_VEC_VID_COLUMN_NAME = "__vid";
+const char *const OB_VEC_TYPE_COLUMN_NAME_PREFIX = "__type";
+const char *const OB_VEC_VECTOR_COLUMN_NAME_PREFIX = "__vector";
+const char *const OB_VEC_SCN_COLUMN_NAME_PREFIX = "__scn";
+const char *const OB_VEC_KEY_COLUMN_NAME_PREFIX = "__key";
+const char *const OB_VEC_DATA_COLUMN_NAME_PREFIX = "__data";
+
 // fulltext search
 const char *const OB_DOC_ID_COLUMN_NAME = "__doc_id";
 const char *const OB_WORD_SEGMENT_COLUMN_NAME_PREFIX = "__word_segment";
@@ -707,7 +739,11 @@ const int64_t OB_INNER_TABLE_BACKUP_DEFAULT_FIELD_LENGTH = 256;
 const int64_t OB_MAX_BACKUP_PTAH_LIST_LENGTH = 8 * 1024;
 const int64_t OB_MAX_EXECUTOR_TENANT_LENGTH = 64 * 1024;
 
+// object storage service
+const int64_t OB_MAX_STORAGE_OPERATION_INFO_LENGTH = 8 * 1024;
+
 const char *const OB_LOCAL_PREFIX = "local://";
+const char *const OB_LOCAL_CACHE_PREFIX = "localcache://";
 const char *const OB_OSS_PREFIX = "oss://";
 const char *const OB_FILE_PREFIX = "file://";
 const char *const OB_COS_PREFIX = "cos://";
@@ -716,6 +752,7 @@ const char *const OB_S3_APPENDABLE_FORMAT_META = "FORMAT_META";
 const char *const OB_S3_APPENDABLE_SEAL_META = "SEAL_META";
 const char *const OB_S3_APPENDABLE_FRAGMENT_PREFIX = "@APD_PART@";
 const int64_t OB_STORAGE_LIST_MAX_NUM = 1000;
+const int64_t OB_STORAGE_DEL_MAX_NUM = 1000;
 const char *const OB_RESOURCE_UNIT_DEFINITION = "resource_unit_definition";
 const char *const OB_RESOURCE_POOL_DEFINITION = "resource_pool_definition";
 const char *const OB_CREATE_TENANT_DEFINITION = "create_tenant_definition";
@@ -834,6 +871,10 @@ const uint64_t DEFAULT_CUSTOMIZED_CG_NUM = 2;
 const int64_t OB_CG_NAME_PREFIX_LENGTH = 5; // length of cg prefix like "__cg_"
 const int64_t OB_MAX_COLUMN_GROUP_NAME_LENGTH = OB_MAX_COLUMN_NAME_LENGTH * OB_MAX_CHAR_LEN + OB_CG_NAME_PREFIX_LENGTH; //(max_column_name_length(128) * ob_max_char_len(3)) + prefix
 const int64_t MAX_NAME_CHAR_LEN = 64;
+const int64_t MAX_AUDIT_FILTER_NAME_LENGTH = 64;
+const int64_t MAX_AUDIT_FILTER_NAME_LENGTH_BYTE = 4 * MAX_AUDIT_FILTER_NAME_LENGTH;
+const int64_t MAX_AUDIT_USER_NAME_LENGTH_BYTE = 4 * OB_MAX_USER_NAME_LENGTH_STORE;
+const int64_t MAX_AUDIT_HOST_NAME_LENGTH_BYTE = 4 * OB_MAX_HOST_NAME_LENGTH;
 
 //Oracle
 const int64_t MAX_ORACLE_COMMENT_LENGTH = 4000;
@@ -1455,6 +1496,9 @@ const int64_t OB_COMPACTION_INFO_LENGTH = 128;
 const int64_t OB_MERGE_LEVEL_STR_LENGTH = 64;
 const int64_t OB_MERGE_ROLE_STR_LENGTH = 64;
 const int64_t OB_MERGE_COMMENT_INNER_STR_LENGTH = 800;
+const int64_t OB_CKM_ERROR_INFO_STR_LENGTH = 1024;
+const int64_t OB_COMPACTION_STATUS_STR_LENGTH = 256;
+const int64_t OB_STORAGE_PATH_STR_LENGTH = 256;
 
 // for erasure code
 const int64_t OB_MAX_EC_STRIPE_COUNT = 32;
@@ -1503,6 +1547,11 @@ const char *const OB_MYSQL_PROXY_VEERSION = "__proxy_version";
 
 const char *const OB_MYSQL_CLIENT_VERSION = "__ob_client_version";
 const char *const OB_MYSQL_CLIENT_NAME = "__ob_client_name";
+
+const char *const OB_MYSQL_FAILOVER_MODE = "__proxy_failover_mode";
+const char *const OB_MYSQL_FAILOVER_MODE_OFF = "off";
+const char *const OB_MYSQL_FAILOVER_MODE_ON = "on";
+const char *const OB_MYSQL_SERVICE_NAME = "__proxy_service_name";
 
 const char *const OB_MYSQL_JDBC_CLIENT_NAME = "OceanBase Connector/J";
 const char *const OB_MYSQL_OCI_CLIENT_NAME = "OceanBase Connector/C";
@@ -1680,7 +1729,7 @@ OB_INLINE bool is_bootstrap_resource_pool(const uint64_t resource_pool_id)
 
 // ob_malloc & ob_tc_malloc
 const int64_t OB_MALLOC_NORMAL_BLOCK_SIZE = (1LL << 13) - 256;                 // 8KB
-const int64_t OB_MALLOC_MIDDLE_BLOCK_SIZE = (1LL << 16) - 128;                 // 64KB
+const int64_t OB_MALLOC_MIDDLE_BLOCK_SIZE = (1LL << 16) - 256;                 // 64KB
 const int64_t OB_MALLOC_BIG_BLOCK_SIZE = (1LL << 21) - ACHUNK_PRESERVE_SIZE;// 2MB (-17KB)
 const int64_t OB_MALLOC_REQ_NORMAL_BLOCK_SIZE = (240LL << 10);                 // 240KB
 
@@ -2063,17 +2112,19 @@ enum ObFreezeStatus
 };
 
 /*
- * |---- 2 bits ---|--- 4 bits ---|--- 2 bits ---|--- 2 bits ---| LSB
- * |-- encryption--|---  clog  ---|-- SSStore ---|--- MemStore--| LSB
+ * |---- 2 bits ---|---- 2 bits ---|--- 4 bits ---|--- 2 bits ---|--- 2 bits ---| LSB
+ * |--column-store-|-- encryption--|---  clog  ---|-- SSStore ---|--- MemStore--| LSB
  */
 const int64_t MEMSTORE_BITS_SHIFT = 0;
 const int64_t SSSTORE_BITS_SHIFT = 2;
 const int64_t CLOG_BITS_SHIFT = 4;
 const int64_t ENCRYPTION_BITS_SHIFT = 8;
+const int64_t COLUMNSTORE_BITS_SHIFT = 10;
 const int64_t REPLICA_TYPE_MEMSTORE_MASK = (0x3UL << MEMSTORE_BITS_SHIFT);
 const int64_t REPLICA_TYPE_SSSTORE_MASK = (0x3UL << SSSTORE_BITS_SHIFT);
 const int64_t REPLICA_TYPE_CLOG_MASK = (0xFUL << CLOG_BITS_SHIFT);
 const int64_t REPLICA_TYPE_ENCRYPTION_MASK = (0x3UL << ENCRYPTION_BITS_SHIFT);
+const int64_t REPLICA_TYPE_COLUMNSTORE_MASK = (0x3UL << COLUMNSTORE_BITS_SHIFT);
 // replica type associated with memstore
 const int64_t WITH_MEMSTORE = 0;
 const int64_t WITHOUT_MEMSTORE = 1;
@@ -2086,16 +2137,22 @@ const int64_t ASYNC_CLOG = 1 << CLOG_BITS_SHIFT;
 // replica type associated with encryption
 const int64_t WITHOUT_ENCRYPTION = 0 << ENCRYPTION_BITS_SHIFT;
 const int64_t WITH_ENCRYPTION = 1 << ENCRYPTION_BITS_SHIFT;
+// replica type associated with columnstore
+const int64_t NOT_COLUMNSTORE = 0 << COLUMNSTORE_BITS_SHIFT;
+const int64_t COLUMNSTORE = 1 << COLUMNSTORE_BITS_SHIFT;
 
 // tracepoint, refer to OB_MAX_CONFIG_xxx
 const int64_t OB_MAX_TRACEPOINT_NAME_LEN = 128;
 const int64_t OB_MAX_TRACEPOINT_DESCRIBE_LEN = 4096;
 
-// Need to manually maintain the replica_type_to_str function in utility.cpp,
-// Currently there are only three types: REPLICA_TYPE_FULL, REPLICA_TYPE_READONLY, and REPLICA_TYPE_LOGONLY
+// Please modify the replica_type_to_string and string_to_replica_type function
+// in ob_share_util.cpp when adding new replica_type.
 enum ObReplicaType
 {
-  // Almighty copy: is a member of paxos; has ssstore; has memstore
+  // Invalid replica_type, value of which is -1.
+  // Attention: Please DO use REPLICA_TYPE_INVALID as initial value. DO NOT use REPLICA_TYPE_MAX.
+  REPLICA_TYPE_INVALID = -1,
+  // Fully functional copy: is a member of paxos; has ssstore; has memstore
   REPLICA_TYPE_FULL = (SYNC_CLOG | WITH_SSSTORE | WITH_MEMSTORE), // 0
   // Backup copy: Paxos member; ssstore; no memstore
   REPLICA_TYPE_BACKUP = (SYNC_CLOG | WITH_SSSTORE | WITHOUT_MEMSTORE), // 1
@@ -2112,54 +2169,44 @@ enum ObReplicaType
   REPLICA_TYPE_ARBITRATION = (ASYNC_CLOG | WITHOUT_SSSTORE | WITHOUT_MEMSTORE), // 21
   // Encrypted log copy: encrypted; paxos member; no sstore; no memstore
   REPLICA_TYPE_ENCRYPTION_LOGONLY = (WITH_ENCRYPTION | SYNC_CLOG | WITHOUT_SSSTORE | WITHOUT_MEMSTORE), // 261
-  // invalid value
+  // Column-store copy: column-store, not a member of paxos; ssstore; memstore
+  REPLICA_TYPE_COLUMNSTORE = (COLUMNSTORE | ASYNC_CLOG | WITH_SSSTORE | WITH_MEMSTORE), // 1040
+  // max value
   REPLICA_TYPE_MAX,
 };
 
-static inline int replica_type_to_string(const ObReplicaType replica_type, char *name_str, const int64_t str_len)
-{
-  int ret = OB_SUCCESS;
-  switch(replica_type) {
-  case REPLICA_TYPE_FULL: {
-    strncpy(name_str ,"FULL", str_len);
-    break;
-  }
-  case REPLICA_TYPE_BACKUP: {
-    strncpy(name_str ,"BACKUP", str_len);
-    break;
-  }
-  case REPLICA_TYPE_LOGONLY: {
-    strncpy(name_str ,"LOGONLY", str_len);
-    break;
-  }
-  case REPLICA_TYPE_READONLY: {
-    strncpy(name_str ,"READONLY", str_len);
-    break;
-  }
-  case REPLICA_TYPE_MEMONLY: {
-    strncpy(name_str ,"MEMONLY", str_len);
-    break;
-  }
-  case REPLICA_TYPE_ENCRYPTION_LOGONLY: {
-    strncpy(name_str ,"ENCRYPTION_LOGONLY", str_len);
-    break;
-  }
-  default: {
-    ret = OB_INVALID_ARGUMENT;
-    strncpy(name_str ,"INVALID", str_len);
-    break;
-  } // default
-  } // switch
-  return ret;
-}
+// full replica
+const char *const FULL_REPLICA_STR = "FULL";
+const char *const F_REPLICA_STR = "F";
+// logonly replica
+const char *const LOGONLY_REPLICA_STR = "LOGONLY";
+const char *const L_REPLICA_STR = "L";
+// backup replica
+const char *const BACKUP_REPLICA_STR = "BACKUP";
+const char *const B_REPLICA_STR = "B";
+// readonly replica
+const char *const READONLY_REPLICA_STR = "READONLY";
+const char *const R_REPLICA_STR = "R";
+// memonly replica
+const char *const MEMONLY_REPLICA_STR = "MEMONLY";
+const char *const M_REPLICA_STR = "M";
+// encryption logonly replica
+const char *const ENCRYPTION_LOGONLY_REPLICA_STR = "ENCRYPTION_LOGONLY";
+const char *const E_REPLICA_STR = "E";
+// columnstore replica
+const char *const COLUMNSTORE_REPLICA_STR = "COLUMNSTORE";
+const char *const C_REPLICA_STR = "C";
 
 class ObReplicaTypeCheck
 {
 public:
+  // Currently only three types are valid,
+  // including REPLICA_TYPE_FULL, REPLICA_TYPE_READONLY, and REPLICA_TYPE_COLUMNSTORE
   static bool is_replica_type_valid(const int32_t replica_type)
   {
     return REPLICA_TYPE_FULL == replica_type
-           || REPLICA_TYPE_READONLY == replica_type;
+           || REPLICA_TYPE_READONLY == replica_type
+           || REPLICA_TYPE_COLUMNSTORE == replica_type;
   }
   static bool is_can_elected_replica(const int32_t replica_type)
   {
@@ -2172,6 +2219,10 @@ public:
   static bool is_readonly_replica(const int32_t replica_type)
   {
     return (REPLICA_TYPE_READONLY == replica_type);
+  }
+  static bool is_columnstore_replica(const int32_t replica_type)
+  {
+    return (REPLICA_TYPE_COLUMNSTORE == replica_type);
   }
   static bool is_log_replica(const int32_t replica_type)
   {
@@ -2187,13 +2238,18 @@ public:
     return (replica_type >= REPLICA_TYPE_FULL && replica_type <= REPLICA_TYPE_LOGONLY)
             || (REPLICA_TYPE_ENCRYPTION_LOGONLY == replica_type);
   }
+  static bool is_non_paxos_replica(const int32_t replica_type)
+  {
+    return (REPLICA_TYPE_READONLY == replica_type || REPLICA_TYPE_COLUMNSTORE == replica_type);
+  }
   static bool is_writable_replica(const int32_t replica_type)
   {
     return (REPLICA_TYPE_FULL == replica_type);
   }
   static bool is_readable_replica(const int32_t replica_type)
   {
-    return (REPLICA_TYPE_FULL == replica_type || REPLICA_TYPE_READONLY == replica_type);
+    return (REPLICA_TYPE_FULL == replica_type || REPLICA_TYPE_READONLY == replica_type
+            || REPLICA_TYPE_COLUMNSTORE == replica_type);
   }
   static bool is_replica_with_memstore(const ObReplicaType replica_type)
   {
@@ -2207,15 +2263,11 @@ public:
   {
     return (REPLICA_TYPE_FULL == replica_type || REPLICA_TYPE_READONLY == replica_type);
   }
-  static bool can_as_data_source(const int32_t dest_replica_type, const int32_t src_replica_type)
-  {
-    return  (dest_replica_type == src_replica_type
-             || REPLICA_TYPE_FULL == src_replica_type); // TODO temporarily only supports the same type or F as the data source
-  }
   //Currently only copies of F and R can be used for machine reading, not L
   static bool can_slave_read_replica(const int32_t replica_type)
   {
-    return (REPLICA_TYPE_FULL == replica_type || REPLICA_TYPE_READONLY == replica_type);
+    return (REPLICA_TYPE_FULL == replica_type || REPLICA_TYPE_READONLY == replica_type
+            || REPLICA_TYPE_COLUMNSTORE == replica_type);
   }
 
   static bool change_replica_op_allow(const ObReplicaType source, const ObReplicaType target)
@@ -2223,6 +2275,8 @@ public:
     bool bool_ret = false;
 
     if (REPLICA_TYPE_LOGONLY == source || REPLICA_TYPE_LOGONLY == target) {
+      bool_ret = false;
+    } else if (REPLICA_TYPE_COLUMNSTORE == source || REPLICA_TYPE_COLUMNSTORE == target) {
       bool_ret = false;
     } else if (REPLICA_TYPE_FULL == source) {
       bool_ret = true;

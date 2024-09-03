@@ -1269,7 +1269,7 @@ int ObTmpTenantFileStore::alloc_macro_block(const int64_t dir_id, const uint64_t
   return ret;
 }
 
-int ObTmpTenantFileStore::read(ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpTenantFileStore::read(ObTmpBlockIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpBlockValueHandle tb_handle;
@@ -1287,7 +1287,7 @@ int ObTmpTenantFileStore::read(ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &han
     STORAGE_LOG(WARN, "the block is NULL", K(ret), K_(io_info.block_id));
   } else {
     if (OB_SUCC(block->get_block_cache_handle(tb_handle))) {
-      ObTmpFileIOHandle::ObBlockCacheHandle block_handle(
+      ObSSTmpFileIOHandle::ObBlockCacheHandle block_handle(
           tb_handle,
           io_info.buf_,
           io_info.offset_,
@@ -1310,7 +1310,7 @@ int ObTmpTenantFileStore::read(ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &han
 }
 
 int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io_info,
-    ObTmpFileIOHandle &handle)
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   int64_t page_start_id = io_info.offset_ / ObTmpMacroBlock::get_default_page_size();
@@ -1332,7 +1332,7 @@ int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io
       ObTmpPageCacheKey key(io_info.block_id_, page_start_id, io_info.tenant_id_);
       ObTmpPageValueHandle p_handle;
       if (OB_SUCC(page_cache_->get_page(key, p_handle))) {
-        ObTmpFileIOHandle::ObPageCacheHandle page_handle(
+        ObSSTmpFileIOHandle::ObPageCacheHandle page_handle(
             p_handle,
             io_info.buf_ + ObTmpMacroBlock::calculate_offset(page_start_id, offset) - io_info.offset_,
             offset,
@@ -1365,7 +1365,7 @@ int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io
   if (OB_SUCC(ret)) {
     if (page_io_infos->count() > DEFAULT_PAGE_IO_MERGE_RATIO * page_nums) {
       // merge multi page io into one.
-      ObMacroBlockHandle mb_handle;
+      ObStorageObjectHandle object_handle;
       ObTmpBlockIOInfo info(io_info);
       const int64_t p_offset = common::lower_align(io_info.offset_, ObTmpMacroBlock::get_default_page_size());
       // just skip header and padding.
@@ -1373,16 +1373,16 @@ int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io
       info.size_ = page_nums * ObTmpMacroBlock::get_default_page_size();
       info.macro_block_id_ = block->get_macro_block_id();
       if (handle.is_disable_page_cache()) {
-        if (OB_FAIL(page_cache_->direct_read(info, mb_handle, io_allocator_))) {
+        if (OB_FAIL(page_cache_->direct_read(info, object_handle, io_allocator_))) {
           STORAGE_LOG(WARN, "fail to direct read multi page", K(ret));
         }
       } else {
-        if (OB_FAIL(page_cache_->prefetch(info, *page_io_infos, mb_handle, io_allocator_))) {
+        if (OB_FAIL(page_cache_->prefetch(info, *page_io_infos, object_handle, io_allocator_))) {
           STORAGE_LOG(WARN, "fail to prefetch multi tmp page", K(ret));
         }
       }
       if (OB_SUCC(ret)) {
-        ObTmpFileIOHandle::ObIOReadHandle read_handle(mb_handle, io_info.buf_,
+        ObSSTmpFileIOHandle::ObIOReadHandle read_handle(object_handle, io_info.buf_,
             io_info.offset_ - p_offset, io_info.size_);
         if (OB_FAIL(handle.get_io_handles().push_back(read_handle))) {
           STORAGE_LOG(WARN, "Fail to push back into read_handles", K(ret));
@@ -1391,7 +1391,7 @@ int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io
     } else {
       // just do io, page by page.
       for (int i = 0; OB_SUCC(ret) && i < page_io_infos->count(); i++) {
-        ObMacroBlockHandle mb_handle;
+        ObStorageObjectHandle object_handle;
         ObTmpBlockIOInfo info(io_info);
         info.offset_ = page_io_infos->at(i).key_.get_page_id() * ObTmpMacroBlock::get_default_page_size();
         // just skip header and padding.
@@ -1399,18 +1399,19 @@ int ObTmpTenantFileStore::read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io
         info.size_ = ObTmpMacroBlock::get_default_page_size();
         info.macro_block_id_ = block->get_macro_block_id();
         if (handle.is_disable_page_cache()) {
-          if (OB_FAIL(page_cache_->direct_read(info, mb_handle, io_allocator_))) {
+          if (OB_FAIL(page_cache_->direct_read(info, object_handle, io_allocator_))) {
             STORAGE_LOG(WARN, "fail to direct read tmp page", K(ret));
           }
         } else {
-          if (OB_FAIL(page_cache_->prefetch(page_io_infos->at(i).key_, info, mb_handle, io_allocator_))) {
+          if (OB_FAIL(page_cache_->prefetch(page_io_infos->at(i).key_, info, object_handle, io_allocator_))) {
             STORAGE_LOG(WARN, "fail to prefetch tmp page", K(ret));
           }
         }
         if (OB_SUCC(ret)) {
           char *buf = io_info.buf_ + ObTmpMacroBlock::calculate_offset(
               page_io_infos->at(i).key_.get_page_id(), page_io_infos->at(i).offset_) - io_info.offset_;
-          ObTmpFileIOHandle::ObIOReadHandle read_handle(mb_handle, buf, page_io_infos->at(i).offset_,
+          ObSSTmpFileIOHandle::ObIOReadHandle read_handle(
+              object_handle, buf, page_io_infos->at(i).offset_,
               page_io_infos->at(i).size_);
           if (OB_FAIL(handle.get_io_handles().push_back(read_handle))) {
             STORAGE_LOG(WARN, "Fail to push back into read_handles", K(ret));
@@ -1642,7 +1643,7 @@ int ObTmpFileStore::init()
     STORAGE_LOG(WARN, "ObTmpFileStore has not been inited", K(ret));
   } else if (OB_FAIL(allocator_.init(TOTAL_LIMIT, HOLD_LIMIT, BLOCK_SIZE))) {
     STORAGE_LOG(WARN, "fail to init allocator", K(ret));
-  } else if (OB_FAIL(ObTmpPageCache::get_instance().init("tmp_page_cache",
+  } else if (OB_FAIL(ObTmpPageCache::get_instance().init("sn_tmp_page_cache",
                                                          TMP_FILE_PAGE_CACHE_PRIORITY))) {
     STORAGE_LOG(WARN, "Fail to init tmp page cache, ", K(ret));
   } else if (OB_FAIL(ObTmpBlockCache::get_instance().init("tmp_block_cache",
@@ -1677,7 +1678,7 @@ int ObTmpFileStore::alloc(const int64_t dir_id, const uint64_t tenant_id, const 
 }
 
 int ObTmpFileStore::read(const uint64_t tenant_id, ObTmpBlockIOInfo &io_info,
-    ObTmpFileIOHandle &handle)
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpTenantFileStoreHandle store_handle;

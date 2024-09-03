@@ -35,6 +35,7 @@
 #include "share/cache/ob_kv_storecache.h" // ObKVCacheHandle
 #include "lib/hash/ob_pointer_hashmap.h"
 #include "lib/string/ob_sql_string.h"
+#include "sql/session/ob_local_session_var.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,7 @@ namespace sql
 {
 class ObSQLSessionInfo;
 class ObPartitionExecutorUtils;
+class ObLocalSessionVar;
 }
 namespace rootserver
 {
@@ -611,6 +613,15 @@ inline bool is_available_index_status(const ObIndexStatus index_status)
 
 const char *ob_index_status_str(ObIndexStatus status);
 
+inline bool is_local_vec_index(const ObIndexType index_type)
+{
+  return index_type == INDEX_TYPE_VEC_ROWKEY_VID_LOCAL ||
+         index_type == INDEX_TYPE_VEC_VID_ROWKEY_LOCAL ||
+         index_type == INDEX_TYPE_VEC_DELTA_BUFFER_LOCAL ||
+         index_type == INDEX_TYPE_VEC_INDEX_ID_LOCAL ||
+         index_type == INDEX_TYPE_VEC_INDEX_SNAPSHOT_DATA_LOCAL;
+}
+
 inline bool is_local_fts_index(const ObIndexType index_type)
 {
   return index_type == INDEX_TYPE_ROWKEY_DOC_ID_LOCAL ||
@@ -735,13 +746,19 @@ inline bool is_built_in_vec_index(const ObIndexType index_type)
 {
   return is_vec_rowkey_vid_type(index_type) ||
          is_vec_vid_rowkey_type(index_type) ||
-         is_vec_delta_buffer_type(index_type) ||
+         is_vec_index_id_type(index_type) ||
          is_vec_index_snapshot_data_type(index_type);
 }
 
 inline bool is_vec_index(const ObIndexType index_type)
 {
-  return is_vec_index_id_type(index_type) || is_built_in_vec_index(index_type);
+  return is_vec_delta_buffer_type(index_type) || is_built_in_vec_index(index_type);
+}
+
+inline bool is_built_in_index(const ObIndexType index_type)
+{
+  return is_built_in_vec_index(index_type) ||
+         is_built_in_fts_index(index_type);
 }
 
 inline bool is_index_local_storage(ObIndexType index_type)
@@ -755,6 +772,7 @@ inline bool is_index_local_storage(ObIndexType index_type)
            || INDEX_TYPE_SPATIAL_LOCAL == index_type
            || INDEX_TYPE_SPATIAL_GLOBAL_LOCAL_STORAGE == index_type
            || is_local_fts_index(index_type)
+           || is_local_vec_index(index_type)
            || is_global_local_fts_index(index_type)
            || is_local_multivalue_index(index_type);
 }
@@ -780,7 +798,8 @@ inline bool index_has_tablet(const ObIndexType &index_type)
         || INDEX_TYPE_SPATIAL_GLOBAL == index_type
         || INDEX_TYPE_SPATIAL_GLOBAL_LOCAL_STORAGE == index_type
         || is_fts_index(index_type)
-        || is_multivalue_index(index_type);
+        || is_multivalue_index(index_type)
+        || is_vec_index(index_type);
 }
 
 struct ObTenantTableId
@@ -1413,7 +1432,6 @@ typedef common::ObArray<ObZoneScore> ObPrimaryZoneArray;
 class ObSchema
 {
 public:
-  friend class ObLocality;
   friend class ObPrimaryZone;
   ObSchema();
   //explicit ObSchema(common::ObDataBuffer &buffer);
@@ -1528,31 +1546,6 @@ struct SchemaObj
   ObSchema *schema_;
   common::ObKVCacheHandle handle_;
   TO_STRING_KV(K_(schema_type), K_(tenant_id), K_(schema_id), KP_(schema));
-};
-
-class ObLocality
-{
-  OB_UNIS_VERSION(1);
-public:
-  explicit ObLocality(ObSchema *schema) : schema_(schema) {}
-  int assign(const ObLocality &other);
-  int set_locality_str(const common::ObString &locality);
-  int set_zone_replica_attr_array(
-      const common::ObIArray<share::ObZoneReplicaAttrSet> &src);
-  int set_zone_replica_attr_array(
-      const common::ObIArray<share::SchemaZoneReplicaAttrSet> &src);
-  int set_specific_replica_attr_array(
-      share::SchemaReplicaAttrArray &schema_replica_set,
-      const common::ObIArray<ReplicaAttr> &src);
-  void reset_zone_replica_attr_array();
-  int64_t get_convert_size() const;
-  inline const common::ObString &get_locality_str() const { return locality_str_; }
-  void reset();
-  TO_STRING_KV(K_(locality_str), K_(zone_replica_attr_array));
-public:
-  common::ObString locality_str_;
-  ZoneLocalityArray zone_replica_attr_array_;
-  ObSchema *schema_;
 };
 
 class ObPrimaryZone
@@ -3440,6 +3433,30 @@ int ObPartitionUtils::get_end_(
   }
   return ret;
 }
+
+enum class ObVectorRefreshMethod : int64_t
+{
+  REFRESH_COMPLETE = 0,
+  REFRESH_DELTA = 1,
+  REBUILD_COMPLETE = 2,
+  MAX,
+};
+
+enum class ObVectorIndexOrganization : int64_t
+{
+  IN_MEMORY_NEIGHBOR_GRAPH = 0,
+  NEIGHBOR_PARTITION = 1,
+};
+
+enum class ObVetcorIndexDistanceMetric : int64_t
+{
+  EUCLIDEAN = 0,
+  EUCLIDEAN_SQUARED = 1,
+  DOT = 2,
+  COSINE = 3,
+  MANHATTAN = 4,
+  HAMMING = 5,
+};
 
 enum class ObMLogPurgeMode : int64_t
 {
@@ -9325,55 +9342,6 @@ struct GetIndexNameKey<ObIndexSchemaHashWrapper, ObIndexNameInfo*>
 };
 
 typedef common::hash::ObPointerHashMap<ObIndexSchemaHashWrapper, ObIndexNameInfo*, GetIndexNameKey, 1024> ObIndexNameMap;
-
-struct ObSessionSysVar {
-  OB_UNIS_VERSION(1);
-public:
-  TO_STRING_KV(K_(type), K_(val));
-  bool is_equal(const ObObj &other_val) const;
-  int64_t get_deep_copy_size() const;
-  ObSysVarClassType type_;
-  ObObj val_;
-};
-
-class ObLocalSessionVar {
-  OB_UNIS_VERSION(1);
-public:
-  ObLocalSessionVar(ObIAllocator *alloc)
-    :alloc_(alloc),
-    local_session_vars_(alloc) {
-    }
-  ObLocalSessionVar ()
-    :alloc_(NULL) {
-    }
-  ~ObLocalSessionVar() { reset(); }
-  void set_allocator(ObIAllocator *allocator) {
-    alloc_ = allocator;
-    local_session_vars_.set_allocator(allocator);
-  }
-  void reset();
-  int set_local_var_capacity(int64_t sz);
-  template<class T>
-  int set_local_vars(T &var_array);
-  int add_local_var(ObSysVarClassType var_type, const ObObj &value);
-  int add_local_var(const ObSessionSysVar *var);
-  int get_local_var(ObSysVarClassType var_type, ObSessionSysVar *&sys_var) const;
-  int get_local_vars(ObIArray<const ObSessionSysVar *> &var_array) const;
-  int load_session_vars(const sql::ObBasicSessionInfo *session);
-  int update_session_vars_with_local(sql::ObBasicSessionInfo &session) const;
-  int remove_vars_same_with_session(const sql::ObBasicSessionInfo *session);
-  int deep_copy(const ObLocalSessionVar &other);
-  int deep_copy_self();
-  int assign(const ObLocalSessionVar &other);
-  bool operator == (const ObLocalSessionVar& other) const;
-  int64_t get_deep_copy_size() const ;
-  int64_t get_var_count() const { return local_session_vars_.count(); }
-  DECLARE_TO_STRING;
-private:
-  const static ObSysVarClassType ALL_LOCAL_VARS[];
-  common::ObIAllocator *alloc_;
-  ObFixedArray<ObSessionSysVar *, common::ObIAllocator> local_session_vars_;
-};
 
 }//namespace schema
 }//namespace share

@@ -34,6 +34,8 @@ using namespace storage;
 
 namespace compaction
 {
+ERRSIM_POINT_DEF(EN_COMPACTION_ADD_CO_MREGE_FINISH_DAG_INTO_DAG_NET_FAILED);
+
 ObCOMergeDagParam::ObCOMergeDagParam()
   : ObTabletMergeDagParam(),
     start_cg_idx_(0),
@@ -82,7 +84,8 @@ int ObCOMergeDag::fill_info_param(compaction::ObIBasicInfoParam *&out_param, ObI
     if (OB_FAIL(ADD_DAG_WARN_INFO_PARAM(out_param, allocator, get_type(),
                                   ls_id_.id(),
                                   static_cast<int64_t>(tablet_id_.id()),
-                                  param_.merge_version_))) {
+                                  param_.merge_version_,
+                                  "exec_mode", exec_mode_to_str(param_.exec_mode_)))) {
       LOG_WARN("failed to fill info param", K(ret));
     }
   }
@@ -181,7 +184,9 @@ int ObCOMergePrepareTask::create_schedule_dag(ObCOTabletMergeCtx &ctx)
   ObGetMergeTablesResult result;
   bool schedule_minor = false;
 
-  if (OB_FAIL(ctx.check_need_schedule_minor(schedule_minor))) {
+  if (is_convert_co_major_merge(ctx.get_merge_type())) {
+    // convert co major merge only rely on major sstable
+  } else if (OB_FAIL(ctx.check_need_schedule_minor(schedule_minor))) {
     LOG_WARN("failed to check need chedule minor", K(ret), K(schedule_minor));
   } else if (schedule_minor) {
     ObTableHandleV2 tmp_table_handle;
@@ -783,7 +788,7 @@ void ObCOMergeBatchExeTask::merge_start()
     co_merger->set_merge_progress(execute_dag->get_merge_progress());
     // execute time click init only once
     if (execute_dag->get_time_guard().is_empty()) {
-      ctx_->cg_merge_info_array_[execute_dag->get_start_cg_idx()]->get_sstable_merge_info().update_start_time();
+      ctx_->cg_merge_info_array_[execute_dag->get_start_cg_idx()]->get_merge_history().update_start_time();
       execute_dag->get_time_guard().set_last_click_ts(execute_dag->get_add_time());
       execute_dag->dag_time_guard_click(ObStorageCompactionTimeGuard::DAG_WAIT_TO_SCHEDULE);
     }
@@ -862,7 +867,7 @@ int ObCOMergeBatchFinishTask::process()
     LOG_WARN("failed to create sstable after merge", K(ret), KPC(execute_dag));
   } else {
     FLOG_INFO("co batch sstable merge finish", K(ret),
-              "start_cg sstable_merge_info", ctx_->cg_merge_info_array_[execute_dag->get_start_cg_idx()]->get_sstable_merge_info(),
+              "start_cg sstable_merge_info", ctx_->cg_merge_info_array_[execute_dag->get_start_cg_idx()]->get_merge_history(),
               "time_guard", execute_dag->get_time_guard(),
               KPC(dag_), "param", ctx_->get_dag_param(),
               "mem_peak", ctx_->mem_ctx_.get_total_mem_peak());
@@ -1054,6 +1059,7 @@ int ObCOMergeDagNet::init_by_param(const ObIDagInitParam *param)
     merge_type_ = merge_param->merge_type_;
     ls_id_ = merge_param->ls_id_;
     tablet_id_ = merge_param->tablet_id_;
+    (void) set_dag_net_id(merge_param->dag_net_id_);
     is_inited_ = true;
   }
   return ret;
@@ -1170,10 +1176,29 @@ int ObCOMergeDagNet::choose_merge_batch_size(const int64_t column_group_cnt)
   } else if (column_group_cnt < ObCOTabletMergeCtx::DEFAULT_CG_MERGE_BATCH_SIZE * 2) {
     merge_batch_size_ = column_group_cnt;
   } else {
-    int64_t batch_cnt = column_group_cnt / ObCOTabletMergeCtx::DEFAULT_CG_MERGE_BATCH_SIZE;
+    const int64_t batch_cnt = column_group_cnt / ObCOTabletMergeCtx::DEFAULT_CG_MERGE_BATCH_SIZE;
     merge_batch_size_ = column_group_cnt / batch_cnt;
   }
 
+  return ret;
+}
+
+int ObCOMergeDagNet::init_cg_schedule_status_for_row_store()
+{
+  int ret = OB_SUCCESS;
+  const int64_t max_cg_idx = co_merge_ctx_->get_schema()->get_column_group_count();
+  int32_t start_cg_idx = OB_INVALID_INDEX;
+
+  if (!co_merge_ctx_->is_build_row_store()) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("invalid co merge type", KPC_(co_merge_ctx));
+  } else if (OB_FAIL(co_merge_ctx_->get_schema()->get_base_rowkey_column_group_index(start_cg_idx))) {
+    LOG_WARN("failed to get all cg or rowkey cg in cg schemas", K(ret), KPC_(co_merge_ctx));
+  } else {
+    MARK_CG_SCHEDULE_STATUS(0, max_cg_idx, ObCOTabletMergeCtx::CG_SCHE_STATUS_FINISHED);
+    co_merge_ctx_->cg_schedule_status_array_[start_cg_idx] = ObCOTabletMergeCtx::CG_SCHE_STATUS_IDLE;
+    co_merge_ctx_->set_batch_finish_for_row_store(max_cg_idx - 1);
+  }
   return ret;
 }
 
@@ -1246,9 +1271,15 @@ int ObCOMergeDagNet::inner_create_and_schedule_dags(ObIDag *parent_dag)
    */
   if (OB_NOT_NULL(parent_dag)
   && (co_merge_ctx_->is_build_row_store() || max_cg_idx < DELAY_SCHEDULE_FINISH_DAG_CG_CNT)) {
+#ifdef ERRSIM
+    if (EN_COMPACTION_ADD_CO_MREGE_FINISH_DAG_INTO_DAG_NET_FAILED) {
+      ret = EN_COMPACTION_ADD_CO_MREGE_FINISH_DAG_INTO_DAG_NET_FAILED;
+      LOG_INFO("ERRSIM EN_COMPACTION_ADD_CO_MREGE_FINISH_DAG_INTO_DAG_NET_FAILED", K(ret), KPC(parent_dag));
+    }
+#endif
     // add into dag_scheduler after parent-child relation generated
-    if (OB_FAIL(create_dag<ObCOMergeFinishDag>(0, 0, finish_dag_, parent_dag/*parent*/, false/*add_scheduler_flag*/))) {
-      LOG_WARN("failed to create finish dag", K(ret));
+    if (FAILEDx(create_dag<ObCOMergeFinishDag>(0, 0, finish_dag_, parent_dag/*parent*/, false/*add_scheduler_flag*/))) {
+      LOG_WARN("failed to create finish dag", K(ret), K_(finish_dag));
     }
   }
   // refine merge_batch_size_ with tenant memory
@@ -1290,7 +1321,7 @@ int ObCOMergeDagNet::inner_create_row_store_dag(
     common::ObIArray<ObCOMergeBatchExeDag *> &exe_dag_array)
 {
   int ret = OB_SUCCESS;
-  LOG_DEBUG("chengkong debug: build row store in this compaction", "co_major_merge_type_",
+  LOG_DEBUG("build row store in this compaction", "co_major_merge_type_",
     ObCOMajorMergePolicy::co_major_merge_type_to_str(co_merge_ctx_->static_param_.co_major_merge_type_));
 
   dag = nullptr;
@@ -1299,13 +1330,9 @@ int ObCOMergeDagNet::inner_create_row_store_dag(
 
   if (OB_FAIL(co_merge_ctx_->get_schema()->get_base_rowkey_column_group_index(start_cg_idx))) {
     LOG_WARN("failed to get all cg or rowkey cg in cg schemas", K(ret));
-  } else if (OB_NOT_NULL(parent_dag)) {
-    // in schedule state, firstly into inner_create_and_schedule_dags
-    MARK_CG_SCHEDULE_STATUS(0, max_cg_idx, ObCOTabletMergeCtx::CG_SCHE_STATUS_FINISHED);
-    co_merge_ctx_->cg_schedule_status_array_[start_cg_idx] = ObCOTabletMergeCtx::CG_SCHE_STATUS_IDLE;
-    co_merge_ctx_->one_batch_finish(max_cg_idx - 1);
-  }
-  if (OB_FAIL(ret) || !ObCOTabletMergeCtx::is_cg_could_schedule(co_merge_ctx_->cg_schedule_status_array_[start_cg_idx])) {
+  } else if (!ObCOTabletMergeCtx::is_cg_could_schedule(co_merge_ctx_->cg_schedule_status_array_[start_cg_idx])) {
+  } else if (OB_FAIL(init_cg_schedule_status_for_row_store())) {
+    LOG_WARN("failed to init cg schedule status", K(ret));
   } else if (OB_FAIL(inner_create_exe_dags(start_cg_idx, start_cg_idx + 1, max_cg_idx, allowed_schedule_dag_count_place_holder,
         dag, exe_dag_array))) {
     LOG_WARN("failed to create or add cg dag", K(ret), K(start_cg_idx));
@@ -1322,8 +1349,10 @@ int ObCOMergeDagNet::inner_create_column_store_dag(
 {
   int ret = OB_SUCCESS;
   dag = nullptr;
-  int64_t start_cg_idx = 0;
-  int64_t end_cg_idx = 0;
+  const int64_t start_schedule_cg_idx = co_merge_ctx_->start_schedule_cg_idx_;
+  int64_t start_cg_idx = start_schedule_cg_idx;
+  int64_t end_cg_idx = start_schedule_cg_idx;
+
   const ObCOTabletMergeCtx::CGScheduleStatus *schedule_status_array = co_merge_ctx_->cg_schedule_status_array_;
   while (OB_SUCC(ret) && end_cg_idx < max_cg_idx && allowed_schedule_dag_count > 0) {
     start_cg_idx = end_cg_idx;
@@ -1492,6 +1521,7 @@ int ObCOMergeDagNet::dag_report_result(
       FLOG_INFO("dag report result", K(ret), K(start_cg_idx), K(end_cg_idx), K(dag_ret), "exe_stat", co_merge_ctx_->exe_stat_);
       if (OB_SUCCESS == dag_ret) {
         MARK_CG_SCHEDULE_STATUS(start_cg_idx, end_cg_idx, ObCOTabletMergeCtx::CG_SCHE_STATUS_FINISHED);
+        (void) co_merge_ctx_->mark_cg_finish(start_cg_idx, end_cg_idx); // ignore failure
         co_merge_ctx_->one_batch_finish(end_cg_idx - start_cg_idx);
       } else {
         // if dag can retry, will not report to dag_net
@@ -1554,25 +1584,43 @@ int ObCOMergeDagNet::prepare_co_merge_ctx()
 {
   int ret = OB_SUCCESS;
   char *buf = nullptr;
-  bool useless_finish_flag = false;
-
+  bool finish_flag = false;
+  #define NEW_CTX(CTX_NAME) \
+    OB_NEWx(CTX_NAME, &tmp_allocator_, *this, basic_param_, tmp_allocator_)
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
     LOG_WARN("dag net is not inited", K(ret), K_(is_inited));
   } else if (OB_UNLIKELY(NULL != co_merge_ctx_)) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("merge ctx is unexpected null", K(ret), KPC(co_merge_ctx_));
-  } else if (!MTL(ObTenantTabletScheduler *)->could_major_merge_start()) {
+  } else if (!MERGE_SCHEDULER_PTR->could_major_merge_start()) {
     ret = OB_CANCELED;
     LOG_INFO("Tenant Merge has been paused", K(ret), KPC(this));
-  } else if (OB_ISNULL(buf = static_cast<char*>(tmp_allocator_.alloc(sizeof(ObCOTabletMergeCtx))))) {
+  } else if (is_local_exec_mode(basic_param_.exec_mode_)) {
+    co_merge_ctx_ = NEW_CTX(ObCOTabletMergeCtx);
+#ifdef OB_BUILD_SHARED_STORAGE
+  } else if (is_output_exec_mode(basic_param_.exec_mode_)) {
+    co_merge_ctx_ = NEW_CTX(ObCOTabletOutputMergeCtx);
+  } else if (is_calc_ckm_exec_mode(basic_param_.exec_mode_)) {
+    co_merge_ctx_ = NEW_CTX(ObCOTabletValidateMergeCtx);
+#endif
+  } else {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("invalid exec mode", KR(ret), K_(basic_param));
+  }
+
+  if (OB_FAIL(ret)) {
+  } else if (OB_ISNULL(co_merge_ctx_)) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
-    LOG_WARN("failed to alloc memory", K(ret), K(ls_id_), K(tablet_id_));
-  } else if (FALSE_IT(co_merge_ctx_ = new (buf) ObCOTabletMergeCtx(*this, basic_param_, tmp_allocator_))) { // will set thread local mem ctx
+    LOG_WARN("failed to alloc ctx", KR(ret), K_(co_merge_ctx));
   } else if (FALSE_IT(co_merge_ctx_->init_time_guard(get_add_time()))) {
   } else if (FALSE_IT(co_merge_ctx_->time_guard_click(ObStorageCompactionTimeGuard::DAG_WAIT_TO_SCHEDULE))) {
-  } else if (OB_FAIL(co_merge_ctx_->build_ctx(useless_finish_flag))) {
-    LOG_WARN("failed to build ctx", KR(ret), KP_(co_merge_ctx));
+  } else if (OB_FAIL(co_merge_ctx_->build_ctx(finish_flag))) {
+    LOG_WARN("failed to build ctx", KR(ret), "param", co_merge_ctx_->get_dag_param(), KP_(co_merge_ctx));
+  } else if (finish_flag) {
+    ret = OB_NO_NEED_MERGE;
+  } else if (OB_FAIL(co_merge_ctx_->check_merge_ctx_valid())) {
+    LOG_WARN("invalid merge ctx", KR(ret), KPC_(co_merge_ctx));
   } else {
     update_merge_status(COMergeStatus::CTX_PREPARED);
   }

@@ -348,6 +348,11 @@ int ObExprCast::calc_result_type2(ObExprResType &type,
   } else if (OB_FAIL(get_cast_type(enable_decimalint,
                                    type2, cast_raw_expr->get_extra(), dst_type))) {
     LOG_WARN("get cast dest type failed", K(ret));
+  } else if (OB_FAIL(ObSQLUtils::get_cs_level_from_cast_mode(cast_raw_expr->get_extra(),
+                                                             type1.get_collation_level(),
+                                                             cs_level))) {
+    LOG_WARN("failed to get collation level", K(ret));
+  } else if (!dst_type.is_collection_sql_type() && FALSE_IT(dst_type.set_collation_level(cs_level))) {
   } else if (OB_FAIL(adjust_udt_cast_type(type1, dst_type, type_ctx))) {
      LOG_WARN("adjust udt cast sub type failed", K(ret));
   } else if (OB_UNLIKELY(!cast_supported(type1.get_type(), type1.get_collation_type(),
@@ -368,10 +373,6 @@ int ObExprCast::calc_result_type2(ObExprResType &type,
     }
   } else if (FALSE_IT(is_explicit_cast = CM_IS_EXPLICIT_CAST(cast_raw_expr->get_extra()))) {
   // check cast supported in cast_map but not support here.
-  } else if (OB_FAIL(ObSQLUtils::get_cs_level_from_cast_mode(cast_raw_expr->get_extra(),
-                                                             type1.get_collation_level(),
-                                                             cs_level))) {
-    LOG_WARN("failed to get collation level", K(ret));
   } else if (!check_cast_allowed(type1.get_type(), type1.get_collation_type(),
                                  dst_type.get_type(), dst_type.get_collation_type(),
                                  is_explicit_cast)) {
@@ -438,7 +439,7 @@ int ObExprCast::calc_result_type2(ObExprResType &type,
       int32_t length = 0;
       if (ob_is_string_or_lob_type(dst_type.get_type()) || ob_is_raw(dst_type.get_type()) || ob_is_json(dst_type.get_type())
           || ob_is_geometry(dst_type.get_type())) {
-        type.set_collation_level(cs_level);
+        type.set_collation_level(dst_type.get_collation_level());
         int32_t len = dst_type.get_length();
         int16_t length_semantics = ((dst_type.is_string_or_lob_locator_type() || dst_type.is_json())
             ? dst_type.get_length_semantics()
@@ -603,6 +604,7 @@ int ObExprCast::calc_result_type2(ObExprResType &type,
       // to add enum_to_str(), so we still set the calc type but skip add implicit cast in decuding.
       type1.set_calc_type(type.get_type());
       type1.set_calc_collation_type(type.get_collation_type());
+      type1.set_calc_collation_level(type.get_collation_level());
       type1.set_calc_accuracy(type.get_accuracy());
     }
   }
@@ -652,6 +654,11 @@ int ObExprCast::get_cast_type(const bool enable_decimal_int,
                || ob_is_user_defined_sql_type(obj_type)
                || ob_is_collection_sql_type(obj_type)) {
       dst_type.set_udt_id(param_type2.get_udt_id());
+      if (ob_is_collection_sql_type(obj_type)) {
+        // recover subschema id
+        dst_type.set_collation_type(static_cast<ObCollationType>(parse_node.int16_values_[OB_NODE_CAST_COLL_IDX]));
+        dst_type.set_collation_level(static_cast<ObCollationLevel>(parse_node.int16_values_[OB_NODE_CAST_CS_LEVEL_IDX]));
+      }
     } else if (lib::is_mysql_mode() && ob_is_json(obj_type)) {
       dst_type.set_collation_type(CS_TYPE_UTF8MB4_BIN);
     } else if (ob_is_geometry(obj_type)) {
@@ -813,9 +820,15 @@ int ObExprCast::adjust_udt_cast_type(const ObExprResType &src_type,
     uint16_t subschema_id = ObMaxSystemUDTSqlType;
 
     if (!ObObjUDTUtil::ob_is_supported_sql_udt(dst_type.get_udt_id())) {
-      ret = OB_NOT_SUPPORTED;
-      LOG_WARN("unsupported udt type for sql udt", K(ret), K(src_type), K(dst_type),
-               K(dst_type.get_udt_id()), K(src_type.get_udt_id()));
+      // maybe is array type, check subschema id validity
+      subschema_id = dst_type.get_subschema_id();
+      ObSubSchemaValue sub_meta;
+      if (OB_ISNULL(exec_ctx)) {
+        ret = OB_BAD_NULL_ERROR;
+        LOG_WARN("need ctx to get subschema mapping", K(ret), K(src_type), K(dst_type), KP(session));
+      } else if (OB_FAIL(exec_ctx->get_sqludt_meta_by_subschema_id(subschema_id, sub_meta))) {
+        LOG_WARN("failed to get udt meta", K(ret), K(subschema_id));
+      }
     } else if (udt_type_id == T_OBJ_XML) {
       subschema_id = 0;
     } else if (OB_ISNULL(exec_ctx)) {

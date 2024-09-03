@@ -234,6 +234,12 @@ int ObRawExprInfoExtractor::visit(ObOpRawExpr &expr)
           LOG_WARN("failed to add flag IS_CONNECT_BY_ROOT", K(ret));
         }
         break;
+      case T_OP_EXISTS:
+      case T_OP_NOT_EXISTS:
+        if (OB_FAIL(expr.add_flag(IS_EXISTS))) {
+          LOG_WARN("failed to add flag IS_EXISTS", K(ret));
+        }
+        break;
       default:
         break;
     }
@@ -474,6 +480,7 @@ int ObRawExprInfoExtractor::visit(ObSysFunRawExpr &expr)
   } else {
     // these functions should not be calculated first
     if (T_FUN_SYS_AUTOINC_NEXTVAL == expr.get_expr_type()
+        || T_FUN_SYS_VEC_VID == expr.get_expr_type()
         || T_FUN_SYS_DOC_ID == expr.get_expr_type()
         || T_FUN_SYS_TABLET_AUTOINC_NEXTVAL == expr.get_expr_type()
         || T_FUN_SYS_SLEEP == expr.get_expr_type()
@@ -485,6 +492,10 @@ int ObRawExprInfoExtractor::visit(ObSysFunRawExpr &expr)
         || T_FUN_NORMAL_UDF == expr.get_expr_type()
         || T_FUN_SYS_GENERATOR == expr.get_expr_type()
         || T_FUN_SYS_LAST_REFRESH_SCN == expr.get_expr_type()
+        || T_FUN_SYS_AUDIT_LOG_SET_FILTER == expr.get_expr_type()
+        || T_FUN_SYS_AUDIT_LOG_REMOVE_FILTER == expr.get_expr_type()
+        || T_FUN_SYS_AUDIT_LOG_SET_USER == expr.get_expr_type()
+        || T_FUN_SYS_AUDIT_LOG_REMOVE_USER == expr.get_expr_type()
         || (T_FUN_UDF == expr.get_expr_type()
             && !static_cast<ObUDFRawExpr&>(expr).is_deterministic())
         || T_FUN_SYS_GET_LOCK == expr.get_expr_type()

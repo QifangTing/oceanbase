@@ -10,10 +10,14 @@
  * See the Mulan PubL v2 for more details.
  */
 
+#define USING_LOG_PREFIX STORAGE
+
 #include "ob_tmp_file.h"
 #include "ob_tmp_file_cache.h"
 #include "observer/ob_server_struct.h"
 #include "share/ob_task_define.h"
+#include "storage/blocksstable/ob_object_manager.h"
+#include "storage/blocksstable/ob_ss_tmp_file_manager.h"
 
 namespace oceanbase
 {
@@ -22,430 +26,6 @@ using namespace share;
 
 namespace blocksstable
 {
-
-ObTmpFileIOInfo::ObTmpFileIOInfo()
-    : fd_(0), dir_id_(0), size_(0), io_timeout_ms_(DEFAULT_IO_WAIT_TIME_MS),
-      tenant_id_(OB_INVALID_TENANT_ID), buf_(NULL), io_desc_(),
-      disable_page_cache_(false)
-{
-}
-
-ObTmpFileIOInfo::~ObTmpFileIOInfo()
-{
-}
-
-void ObTmpFileIOInfo::reset()
-{
-  fd_ = 0;
-  dir_id_ = 0;
-  size_ = 0;
-  io_timeout_ms_ = DEFAULT_IO_WAIT_TIME_MS;
-  tenant_id_ = OB_INVALID_TENANT_ID;
-  buf_ = NULL;
-}
-
-bool ObTmpFileIOInfo::is_valid() const
-{
-  return fd_ >= 0 && dir_id_ >= 0 && size_ > 0 && OB_INVALID_TENANT_ID != tenant_id_
-        && NULL != buf_ && io_desc_.is_valid() && io_timeout_ms_ > 0;
-}
-
-ObTmpFileIOHandle::ObTmpFileIOHandle()
-  : io_handles_(),
-    page_cache_handles_(),
-    block_cache_handles_(),
-    write_block_ids_(),
-    fd_(OB_INVALID_FD),
-    dir_id_(OB_INVALID_ID),
-    tenant_id_(OB_INVALID_TENANT_ID),
-    buf_(NULL),
-    size_(0),
-    is_read_(false),
-    has_wait_(false),
-    is_finished_(false),
-    disable_page_cache_(false),
-    ret_code_(OB_SUCCESS),
-    expect_read_size_(0),
-    last_read_offset_(-1),
-    io_flag_(),
-    update_offset_in_file_(false),
-    last_fd_(OB_INVALID_FD),
-    last_extent_id_(0)
-{
-  io_handles_.set_attr(ObMemAttr(MTL_ID(), "TMP_IO_HDL"));
-  page_cache_handles_.set_attr(ObMemAttr(MTL_ID(), "TMP_PCACHE_HDL"));
-  block_cache_handles_.set_attr(ObMemAttr(MTL_ID(), "TMP_BCACHE_HDL"));
-}
-
-ObTmpFileIOHandle::~ObTmpFileIOHandle()
-{
-  reset();
-}
-
-int ObTmpFileIOHandle::prepare_read(
-    const int64_t read_size,
-    const int64_t read_offset,
-    const common::ObIOFlag io_flag,
-    char *read_buf,
-    int64_t fd,
-    int64_t dir_id,
-    uint64_t tenant_id,
-    bool disable_page_cache)
-{
-  int ret = OB_SUCCESS;
-  if (OB_ISNULL(read_buf)) {
-    ret = OB_INVALID_ARGUMENT;
-    STORAGE_LOG(WARN, "invalid argument", K(ret), KP_(buf));
-  } else {
-    buf_ = read_buf;
-    size_ = 0;
-    fd_ = fd;
-    dir_id_ = dir_id;
-    tenant_id_ = tenant_id;
-    is_read_ = true;
-    has_wait_ = false;
-    expect_read_size_ = read_size;
-    last_read_offset_ = read_offset;
-    io_flag_ = io_flag;
-    disable_page_cache_ = disable_page_cache;
-    if (last_fd_ != fd_) {
-      last_fd_ = fd_;
-      last_extent_id_ = 0;
-    }
-  }
-  return ret;
-}
-
-int ObTmpFileIOHandle::prepare_write(
-    char *write_buf,
-    const int64_t write_size,
-    int64_t fd,
-    int64_t dir_id,
-    uint64_t tenant_id)
-{
-  int ret = OB_SUCCESS;
-  const int64_t bkt_cnt = 17;
-  lib::ObMemAttr bkt_mem_attr(tenant_id, "TmpBlkIDBkt");
-  if (OB_ISNULL(write_buf)) {
-    ret = OB_INVALID_ARGUMENT;
-    STORAGE_LOG(WARN, "invalid argument", K(ret), KP_(buf));
-  } else if (OB_FAIL(write_block_ids_.create(bkt_cnt, bkt_mem_attr))) {
-    STORAGE_LOG(WARN, "create write block id set failed", K(ret), K(bkt_cnt));
-  } else {
-    buf_ = write_buf;
-    size_ = write_size;
-    fd_ = fd;
-    dir_id_ = dir_id;
-    tenant_id_ = tenant_id;
-    is_read_ = false;
-    has_wait_ = false;
-    expect_read_size_ = 0;
-    last_read_offset_ = -1;
-    io_flag_.reset();
-  }
-  return ret;
-}
-
-int ObTmpFileIOHandle::wait()
-{
-  int ret = OB_SUCCESS;
-  const int64_t timeout_ms = std::max(GCONF._data_storage_io_timeout / 1000, DEFAULT_IO_WAIT_TIME_MS);
-  if (timeout_ms < 0) {
-    ret = OB_INVALID_ARGUMENT;
-    STORAGE_LOG(WARN, "invalid argument. timeout must be positive", K(ret), K(timeout_ms));
-  } else if (!is_finished_) {
-    if (is_read_ && OB_FAIL(wait_read_finish(timeout_ms))) {
-      STORAGE_LOG(WARN, "wait read finish failed", K(ret), K(timeout_ms), K(is_read_));
-    } else if (!is_read_ && OB_FAIL(wait_write_finish(timeout_ms))) {
-      STORAGE_LOG(WARN, "wait write finish failed", K(ret), K(timeout_ms), K(is_read_));
-    }
-    ret_code_ = ret;
-    is_finished_ = true;
-  }
-
-  if (OB_SUCC(ret)) {
-    if (OB_FAIL(ret_code_)) {
-      STORAGE_LOG(WARN, "tmp file io error", K(ret), KPC(this));
-    }
-  }
-
-  return ret;
-}
-
-int ObTmpFileIOHandle::wait_write_finish(int64_t timeout_ms)
-{
-  int ret = OB_SUCCESS;
-  if (write_block_ids_.size() == 0) {
-    STORAGE_LOG(DEBUG, "write block ids size is 0", K(ret), K(timeout_ms));
-  } else {
-    // iter all blocks, execute wait
-    common::hash::ObHashSet<int64_t>::const_iterator iter;
-    int64_t begin_us = ObTimeUtility::fast_current_time();
-    int64_t wait_ms = timeout_ms;
-    for (iter = write_block_ids_.begin(); OB_SUCC(ret) && iter != write_block_ids_.end(); ++iter) {
-      const int64_t &blk_id = iter->first;
-      if (OB_FAIL(OB_TMP_FILE_STORE.wait_write_finish(tenant_id_, blk_id, wait_ms))) {
-        STORAGE_LOG(WARN, "fail to wait write finish", K(ret), K(blk_id), K(timeout_ms));
-      }
-      wait_ms = timeout_ms - (ObTimeUtility::fast_current_time() - begin_us) / 1000;
-      if (OB_SUCC(ret) && OB_UNLIKELY(wait_ms <= 0)) {
-        ret = OB_TIMEOUT;
-        STORAGE_LOG(WARN, "fail to wait tmp file write finish", K(ret), K(wait_ms), K(blk_id), K(timeout_ms));
-      }
-    }
-    int bret = OB_SUCCESS;
-    if (OB_UNLIKELY(OB_SUCCESS != (bret = write_block_ids_.destroy()))) {
-      STORAGE_LOG(WARN, "fail to destroy write block id set", K(bret), K(wait_ms), K(timeout_ms));
-    }
-  }
-  return ret;
-}
-
-int ObTmpFileIOHandle::wait_read_finish(const int64_t timeout_ms)
-{
-  int ret = OB_SUCCESS;
-  ObTmpFileHandle file_handle;
-  if (OB_UNLIKELY(has_wait_ && is_read_)) {
-    ret = OB_ERR_UNEXPECTED;
-    STORAGE_LOG(ERROR, "read wait() isn't reentrant interface, shouldn't call again", K(ret));
-  } else if (OB_FAIL(do_read_wait(timeout_ms))) {
-    STORAGE_LOG(WARN, "fail to wait tmp file io", K(ret), K(timeout_ms));
-  } else if (is_read_ && !has_wait_) {
-    if (size_ == expect_read_size_) {
-      //do nothing
-    } else if (OB_UNLIKELY(size_ > expect_read_size_)) {
-      ret = OB_ERR_UNEXPECTED;
-      STORAGE_LOG(WARN, "read size more than expected size", K(ret), K(timeout_ms));
-    } else if (OB_FAIL(FILE_MANAGER_INSTANCE_V2.get_tmp_file_handle(fd_, file_handle))) {
-      STORAGE_LOG(WARN, "fail to get tmp file handle", K(ret));
-    } else {
-      ObTmpFileIOInfo io_info;
-      io_info.fd_ = fd_;
-      io_info.dir_id_ = dir_id_;
-      io_info.tenant_id_ = tenant_id_;
-      io_info.size_ = expect_read_size_;
-      io_info.buf_ = buf_;
-      io_info.io_desc_ = io_flag_;
-      io_info.io_timeout_ms_ = timeout_ms;
-      while (OB_SUCC(ret) && size_ < expect_read_size_) {
-        if (OB_FAIL(file_handle.get_resource_ptr()->once_aio_read_batch(io_info,
-                                                    update_offset_in_file_,
-                                                    last_read_offset_,
-                                                    *this))) {
-          STORAGE_LOG(WARN, "fail to read once batch", K(ret), K(timeout_ms), K(io_info), K(*this));
-        } else if (OB_FAIL(do_read_wait(timeout_ms))) {
-          STORAGE_LOG(WARN, "fail to wait tmp file io", K(ret), K(timeout_ms));
-        }
-      }
-    }
-  }
-
-  if (OB_SUCC(ret) || OB_ITER_END == ret) {
-    has_wait_ = true;
-    expect_read_size_ = 0;
-    last_read_offset_ = -1;
-    io_flag_.reset();
-    update_offset_in_file_ = false;
-  }
-  return ret;
-}
-
-int ObTmpFileIOHandle::do_read_wait(const int64_t timeout_ms)
-{
-  int ret = OB_SUCCESS;
-  for (int32_t i = 0; OB_SUCC(ret) && i < block_cache_handles_.count(); i++) {
-    ObBlockCacheHandle &tmp = block_cache_handles_.at(i);
-    MEMCPY(tmp.buf_, tmp.block_handle_.value_->get_buffer() + tmp.offset_, tmp.size_);
-    tmp.block_handle_.reset();
-  }
-  if (0 != block_cache_handles_.count()) {
-    OB_TMP_FILE_STORE.dec_block_cache_num(tenant_id_, block_cache_handles_.count());
-  }
-  block_cache_handles_.reset();
-
-  for (int32_t i = 0; OB_SUCC(ret) && i < page_cache_handles_.count(); i++) {
-    ObPageCacheHandle &tmp = page_cache_handles_.at(i);
-    MEMCPY(tmp.buf_, tmp.page_handle_.value_->get_buffer() + tmp.offset_, tmp.size_);
-    tmp.page_handle_.reset();
-  }
-  if (0 != page_cache_handles_.count()) {
-    OB_TMP_FILE_STORE.dec_page_cache_num(tenant_id_, page_cache_handles_.count());
-  }
-  page_cache_handles_.reset();
-
-  for (int32_t i = 0; OB_SUCC(ret) && i < io_handles_.count(); i++) {
-    ObIOReadHandle &tmp = io_handles_.at(i);
-    if (OB_FAIL(tmp.macro_handle_.wait())) {
-      STORAGE_LOG(WARN, "fail to wait tmp read io", K(ret));
-    } else {
-      MEMCPY(tmp.buf_, tmp.macro_handle_.get_buffer() + tmp.offset_, tmp.size_);
-      tmp.macro_handle_.reset();
-    }
-  }
-  io_handles_.reset();
-  return ret;
-}
-
-void ObTmpFileIOHandle::reset()
-{
-  for (int32_t i = 0; i < io_handles_.count(); i++) {
-    io_handles_.at(i).macro_handle_.reset();
-  }
-  for (int32_t i = 0; i < block_cache_handles_.count(); i++) {
-    block_cache_handles_.at(i).block_handle_.reset();
-  }
-  if (0 != block_cache_handles_.count()) {
-    OB_TMP_FILE_STORE.dec_block_cache_num(tenant_id_, block_cache_handles_.count());
-  }
-  for (int32_t i = 0; i < page_cache_handles_.count(); i++) {
-    page_cache_handles_.at(i).page_handle_.reset();
-  }
-  if (0 != page_cache_handles_.count()) {
-    OB_TMP_FILE_STORE.dec_page_cache_num(tenant_id_, page_cache_handles_.count());
-  }
-  io_handles_.reset();
-  page_cache_handles_.reset();
-  block_cache_handles_.reset();
-  write_block_ids_.destroy();
-  fd_ = OB_INVALID_FD;
-  dir_id_ = OB_INVALID_ID;
-  tenant_id_ = OB_INVALID_TENANT_ID;
-  buf_ = NULL;
-  size_ = 0;
-  is_read_ = false;
-  has_wait_ = false;
-  expect_read_size_ = 0;
-  last_read_offset_ = -1;
-  io_flag_.reset();
-  update_offset_in_file_ = false;
-  is_finished_ = false;
-  ret_code_ = OB_SUCCESS;
-}
-
-bool ObTmpFileIOHandle::is_valid() const
-{
-  return OB_INVALID_FD != fd_ && OB_INVALID_ID != dir_id_ && OB_INVALID_TENANT_ID != tenant_id_
-      && NULL != buf_ && size_ >= 0;
-}
-
-int ObTmpFileIOHandle::record_block_id(const int64_t block_id)
-{
-  int ret = OB_SUCCESS;
-  if (OB_FAIL(write_block_ids_.set_refactored(block_id, 1))) {
-    STORAGE_LOG(WARN, "record block id failed", K(ret), K(block_id));
-  }
-  return ret;
-}
-
-void ObTmpFileIOHandle::set_last_extent_id(const int64_t last_extent_id)
-{
-  last_extent_id_ = last_extent_id;
-}
-
-int64_t ObTmpFileIOHandle::get_last_extent_id() const
-{
-  return last_extent_id_;
-}
-
-ObTmpFileIOHandle::ObIOReadHandle::ObIOReadHandle()
-  : macro_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-}
-
-ObTmpFileIOHandle::ObIOReadHandle::ObIOReadHandle(const ObMacroBlockHandle &macro_handle,
-    char *buf, const int64_t offset, const int64_t size)
-  : macro_handle_(macro_handle), buf_(buf), offset_(offset), size_(size)
-{
-}
-
-ObTmpFileIOHandle::ObIOReadHandle::~ObIOReadHandle()
-{
-}
-
-ObTmpFileIOHandle::ObIOReadHandle::ObIOReadHandle(const ObTmpFileIOHandle::ObIOReadHandle &other)
-  : macro_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-  *this = other;
-}
-
-ObTmpFileIOHandle::ObIOReadHandle &ObTmpFileIOHandle::ObIOReadHandle::operator=(
-    const ObTmpFileIOHandle::ObIOReadHandle &other)
-{
-  if (&other != this) {
-    macro_handle_ = other.macro_handle_;
-    offset_ = other.offset_;
-    buf_ = other.buf_;
-    size_ = other.size_;
-  }
-  return *this;
-}
-ObTmpFileIOHandle::ObPageCacheHandle::ObPageCacheHandle()
-  : page_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-}
-
-ObTmpFileIOHandle::ObPageCacheHandle::ObPageCacheHandle(const ObTmpPageValueHandle &page_handle,
-    char *buf, const int64_t offset, const int64_t size)
-  : page_handle_(page_handle), buf_(buf), offset_(offset), size_(size)
-{
-}
-
-ObTmpFileIOHandle::ObPageCacheHandle::~ObPageCacheHandle()
-{
-}
-
-ObTmpFileIOHandle::ObPageCacheHandle::ObPageCacheHandle(
-    const ObTmpFileIOHandle::ObPageCacheHandle &other)
-  : page_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-  *this = other;
-}
-
-ObTmpFileIOHandle::ObPageCacheHandle &ObTmpFileIOHandle::ObPageCacheHandle::operator=(
-    const ObTmpFileIOHandle::ObPageCacheHandle &other)
-{
-  if (&other != this) {
-    page_handle_ = other.page_handle_;
-    offset_ = other.offset_;
-    buf_ = other.buf_;
-    size_ = other.size_;
-  }
-  return *this;
-}
-
-ObTmpFileIOHandle::ObBlockCacheHandle::ObBlockCacheHandle()
-  : block_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-}
-
-ObTmpFileIOHandle::ObBlockCacheHandle::ObBlockCacheHandle(const ObTmpBlockValueHandle &block_handle,
-    char *buf, const int64_t offset, const int64_t size)
-  : block_handle_(block_handle), buf_(buf), offset_(offset), size_(size)
-{
-}
-
-ObTmpFileIOHandle::ObBlockCacheHandle::~ObBlockCacheHandle()
-{
-}
-
-ObTmpFileIOHandle::ObBlockCacheHandle::ObBlockCacheHandle(
-    const ObTmpFileIOHandle::ObBlockCacheHandle &other)
-  : block_handle_(), buf_(NULL), offset_(0), size_(0)
-{
-  *this = other;
-}
-
-ObTmpFileIOHandle::ObBlockCacheHandle &ObTmpFileIOHandle::ObBlockCacheHandle::operator=(
-    const ObTmpFileIOHandle::ObBlockCacheHandle &other)
-{
-  if (&other != this) {
-    block_handle_ = other.block_handle_;
-    offset_ = other.offset_;
-    buf_ = other.buf_;
-    size_ = other.size_;
-  }
-  return *this;
-}
 
 void ObTmpFileExtent::set_global_offset(const int64_t g_offset_start, const int64_t g_offset_end)
 {
@@ -479,8 +59,8 @@ ObTmpFileExtent::~ObTmpFileExtent()
 {
 }
 
-int ObTmpFileExtent::read(const ObTmpFileIOInfo &io_info, const int64_t offset, const int64_t size,
-    char *buf, ObTmpFileIOHandle &handle)
+int ObTmpFileExtent::read(const tmp_file::ObTmpFileIOInfo &io_info, const int64_t offset, const int64_t size,
+    char *buf, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(!is_alloced_)) {
@@ -497,7 +77,7 @@ int ObTmpFileExtent::read(const ObTmpFileIOInfo &io_info, const int64_t offset, 
     info.block_id_ = block_id_;
     info.offset_ = start_page_id_ * ObTmpMacroBlock::get_default_page_size() + offset;
     info.size_ = size;
-    info.tenant_id_ = io_info.tenant_id_;
+    info.tenant_id_ = MTL_ID();
     info.io_timeout_ms_ = io_info.io_timeout_ms_;
     if (OB_FAIL(OB_TMP_FILE_STORE.read(owner_->get_tenant_id(), info, handle))) {
       STORAGE_LOG(WARN, "fail to read the extent", K(ret), K(info), K(*this));
@@ -508,7 +88,7 @@ int ObTmpFileExtent::read(const ObTmpFileIOInfo &io_info, const int64_t offset, 
   return ret;
 }
 
-int ObTmpFileExtent::write(const ObTmpFileIOInfo &io_info,int64_t &size, char *&buf)
+int ObTmpFileExtent::write(const tmp_file::ObTmpFileIOInfo &io_info,int64_t &size, char *&buf)
 {
   int ret = OB_SUCCESS;
   int write_size = 0;
@@ -534,7 +114,7 @@ int ObTmpFileExtent::write(const ObTmpFileIOInfo &io_info,int64_t &size, char *&
       info.io_desc_ = io_info.io_desc_;
       info.offset_ = start_page_id_ * ObTmpMacroBlock::get_default_page_size() + get_offset();
       info.size_ = write_size;
-      info.tenant_id_ = io_info.tenant_id_;
+      info.tenant_id_ = MTL_ID();
       info.io_timeout_ms_ = io_info.io_timeout_ms_;
       if (OB_FAIL(OB_TMP_FILE_STORE.write(owner_->get_tenant_id(), info))) {
         STORAGE_LOG(WARN, "fail to write the extent", K(ret));
@@ -803,8 +383,8 @@ int64_t ObTmpFile::find_first_extent(const int64_t offset)
   return first_extent;
 }
 
-int ObTmpFile::aio_read_without_lock(const ObTmpFileIOInfo &io_info,
-    int64_t &offset, ObTmpFileIOHandle &handle)
+int ObTmpFile::aio_read_without_lock(const tmp_file::ObTmpFileIOInfo &io_info,
+    int64_t &offset, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileExtent *tmp = nullptr;
@@ -817,7 +397,7 @@ int ObTmpFile::aio_read_without_lock(const ObTmpFileIOInfo &io_info,
                                          io_info.buf_,
                                          file_meta_.get_fd(),
                                          file_meta_.get_dir_id(),
-                                         io_info.tenant_id_,
+                                         MTL_ID(),
                                          io_info.disable_page_cache_))) {
     STORAGE_LOG(WARN, "fail to prepare read io handle", K(ret), K(io_info), K(offset));
   } else if (OB_UNLIKELY(io_info.size_ > 0 && offset >= tmp->get_global_end())) {
@@ -831,10 +411,10 @@ int ObTmpFile::aio_read_without_lock(const ObTmpFileIOInfo &io_info,
 }
 
 int ObTmpFile::once_aio_read_batch(
-    const ObTmpFileIOInfo &io_info,
+    const tmp_file::ObTmpFileIOInfo &io_info,
     const bool need_update_offset,
     int64_t &offset,
-    ObTmpFileIOHandle &handle)
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileExtent *tmp = nullptr;
@@ -880,9 +460,9 @@ int ObTmpFile::fill_zero(char *buf, const int64_t size)
 }
 
 int ObTmpFile::once_aio_read_batch_without_lock(
-    const ObTmpFileIOInfo &io_info,
+    const tmp_file::ObTmpFileIOInfo &io_info,
     int64_t &offset,
-    ObTmpFileIOHandle &handle)
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   int64_t one_batch_read_size = 0;
@@ -950,7 +530,7 @@ int ObTmpFile::once_aio_read_batch_without_lock(
   return ret;
 }
 
-int64_t ObTmpFile::get_extent_cache(const int64_t offset, const ObTmpFileIOHandle &handle)
+int64_t ObTmpFile::get_extent_cache(const int64_t offset, const ObSSTmpFileIOHandle &handle)
 {
   common::ObIArray<ObTmpFileExtent *> &extents = file_meta_.get_extents();
   int64_t ith_extent = -1;
@@ -970,14 +550,14 @@ int64_t ObTmpFile::get_extent_cache(const int64_t offset, const ObTmpFileIOHandl
   return ith_extent;
 }
 
-int ObTmpFile::aio_read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFile::aio_read(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
     STORAGE_LOG(WARN, "ObTmpFile has not been inited", K(ret));
   } else {
-    tenant_id_ = io_info.tenant_id_;
+    tenant_id_ = MTL_ID();
     SpinWLockGuard guard(lock_);
     if (OB_FAIL(aio_read_without_lock(io_info, offset_, handle))) {
       if (OB_ITER_END != ret) {
@@ -989,8 +569,8 @@ int ObTmpFile::aio_read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handl
   }
   return ret;
 }
-int ObTmpFile::aio_pread(const ObTmpFileIOInfo &io_info, const int64_t offset,
-    ObTmpFileIOHandle &handle)
+int ObTmpFile::aio_pread(const tmp_file::ObTmpFileIOInfo &io_info, const int64_t offset,
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   if (IS_NOT_INIT) {
@@ -1017,10 +597,10 @@ int ObTmpFile::seek(const int64_t offset, const int whence)
     STORAGE_LOG(WARN, "ObTmpFile has not been inited", K(ret));
   } else {
     switch (whence) {
-      case SET_SEEK:
+      case ObTmpFile::FileWhence::SET_SEEK:
         offset_ = offset;
         break;
-      case CUR_SEEK:
+      case ObTmpFile::FileWhence::CUR_SEEK:
         offset_ += offset;
         break;
       default:
@@ -1031,7 +611,7 @@ int ObTmpFile::seek(const int64_t offset, const int whence)
   return ret;
 }
 
-int ObTmpFile::read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFile::read(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   if (OB_FAIL(aio_read(io_info, handle))) {
@@ -1052,7 +632,7 @@ int ObTmpFile::read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
   return ret;
 }
 
-int ObTmpFile::pread(const ObTmpFileIOInfo &io_info, const int64_t offset, ObTmpFileIOHandle &handle)
+int ObTmpFile::pread(const tmp_file::ObTmpFileIOInfo &io_info, const int64_t offset, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   if (IS_NOT_INIT) {
@@ -1076,7 +656,7 @@ int ObTmpFile::pread(const ObTmpFileIOInfo &io_info, const int64_t offset, ObTmp
   return ret;
 }
 
-int ObTmpFile::aio_write(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFile::aio_write(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   // only support append at present.
   int ret = OB_SUCCESS;
@@ -1089,12 +669,13 @@ int ObTmpFile::aio_write(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &hand
     STORAGE_LOG(WARN, "invalid argument", K(ret), K(io_info), K(handle));
   } else if (OB_FAIL(handle.prepare_write(io_info.buf_,
                                           io_info.size_,
+                                          io_info.io_desc_,
                                           file_meta_.get_fd(),
                                           file_meta_.get_dir_id(),
-                                          io_info.tenant_id_))) {
+                                          MTL_ID()))) {
     STORAGE_LOG(WARN, "fail to prepare write io handle", K(ret));
   } else {
-    tenant_id_ = io_info.tenant_id_;
+    tenant_id_ = MTL_ID();
     int64_t size = io_info.size_;
     char *buf = io_info.buf_;
     SpinWLockGuard guard(lock_);
@@ -1372,7 +953,7 @@ int ObTmpFile::truncate(const int64_t offset)
   return ret;
 }
 
-int ObTmpFile::write_file_extent(const ObTmpFileIOInfo &io_info, ObTmpFileExtent *file_extent,
+int ObTmpFile::write_file_extent(const tmp_file::ObTmpFileIOInfo &io_info, ObTmpFileExtent *file_extent,
     int64_t &size, char *&buf)
 {
   int ret = OB_SUCCESS;
@@ -1385,10 +966,10 @@ int ObTmpFile::write_file_extent(const ObTmpFileIOInfo &io_info, ObTmpFileExtent
   return ret;
 }
 
-int ObTmpFile::write(const ObTmpFileIOInfo &io_info)
+int ObTmpFile::write(const tmp_file::ObTmpFileIOInfo &io_info)
 {
   int ret = OB_SUCCESS;
-  ObTmpFileIOHandle handle;
+  ObSSTmpFileIOHandle handle;
   if (OB_FAIL(aio_write(io_info, handle))) {
     STORAGE_LOG(WARN, "fail to write using asynchronous io", K(ret), K(io_info));
   } else if (OB_FAIL(handle.wait())) {
@@ -1457,6 +1038,24 @@ int ObTmpFileManager::init()
   return ret;
 }
 
+int ObTmpFileManager::start()
+{
+  int ret = OB_SUCCESS;
+  return ret;
+}
+
+int ObTmpFileManager::wait()
+{
+  int ret = OB_SUCCESS;
+  return ret;
+}
+
+int ObTmpFileManager::stop()
+{
+  int ret = OB_SUCCESS;
+  return ret;
+}
+
 int ObTmpFileManager::alloc_dir(int64_t &dir)
 {
   int ret = OB_SUCCESS;
@@ -1492,7 +1091,7 @@ void ObTmpFileManager::next_value(int64_t &current_val, int64_t &next_val)
   }
 }
 
-int ObTmpFileManager::open(int64_t &fd, int64_t &dir)
+int ObTmpFileManager::open(int64_t &fd, const int64_t &dir)
 {
   int ret = OB_SUCCESS;
   ObTmpFile file;
@@ -1533,7 +1132,7 @@ int ObTmpFileManager::get_next_fd(int64_t &next_fd)
   return ret;
 }
 
-int ObTmpFileManager::aio_read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFileManager::aio_read(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;
@@ -1554,8 +1153,8 @@ int ObTmpFileManager::aio_read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle
   return ret;
 }
 
-int ObTmpFileManager::aio_pread(const ObTmpFileIOInfo &io_info, const int64_t offset,
-    ObTmpFileIOHandle &handle)
+int ObTmpFileManager::aio_pread(const tmp_file::ObTmpFileIOInfo &io_info, const int64_t offset,
+    ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;
@@ -1576,7 +1175,7 @@ int ObTmpFileManager::aio_pread(const ObTmpFileIOInfo &io_info, const int64_t of
   return ret;
 }
 
-int ObTmpFileManager::read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFileManager::read(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;
@@ -1597,7 +1196,7 @@ int ObTmpFileManager::read(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &ha
   return ret;
 }
 
-int ObTmpFileManager::pread(const ObTmpFileIOInfo &io_info, const int64_t offset, ObTmpFileIOHandle &handle)
+int ObTmpFileManager::pread(const tmp_file::ObTmpFileIOInfo &io_info, const int64_t offset, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;
@@ -1618,7 +1217,7 @@ int ObTmpFileManager::pread(const ObTmpFileIOInfo &io_info, const int64_t offset
   return ret;
 }
 
-int ObTmpFileManager::aio_write(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandle &handle)
+int ObTmpFileManager::aio_write(const tmp_file::ObTmpFileIOInfo &io_info, ObSSTmpFileIOHandle &handle)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;
@@ -1637,7 +1236,7 @@ int ObTmpFileManager::aio_write(const ObTmpFileIOInfo &io_info, ObTmpFileIOHandl
   return ret;
 }
 
-int ObTmpFileManager::write(const ObTmpFileIOInfo &io_info)
+int ObTmpFileManager::write(const tmp_file::ObTmpFileIOInfo &io_info)
 {
   int ret = OB_SUCCESS;
   ObTmpFileHandle file_handle;

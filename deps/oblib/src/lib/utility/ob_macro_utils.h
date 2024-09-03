@@ -29,7 +29,7 @@
                    _130, _131, _132, _133, _134, _135, _136, _137, _138, _139, \
                    _140, ...) _140
 
-// These two macros do same work that select the 110th argument from
+// These two macros do same work that select the 120th argument from
 // argument list.
 #define SELECT140(...) SELECT140_(__VA_ARGS__)
 
@@ -685,6 +685,26 @@ for (__typeof__((c).at(0)) *it = ((extra_condition) && (c).count() > 0 ? &(c).at
   } while(false)
 #endif
 
+#ifndef ENABLE_DEBUG_LOG
+#define OB_SAFE_ASSERT(x)                                                                   \
+    do{                                                                                     \
+    bool v=(x);                                                                             \
+    if(OB_UNLIKELY(!(v))) {                                                                 \
+      _OB_LOG_RET(ERROR, oceanbase::common::OB_ERROR, "assert fail, exp=%s", #x);           \
+      BACKTRACE_RET(ERROR, oceanbase::common::OB_ERROR, 1, "assert fail");                  \
+    }                                                                                       \
+  } while(false)
+#else
+#define OB_SAFE_ASSERT(x)                                                                   \
+    do{                                                                                     \
+    bool v=(x);                                                                             \
+    if(OB_UNLIKELY(!(v))) {                                                                 \
+      _OB_LOG_RET(ERROR, oceanbase::common::OB_ERROR, "assert fail, exp=%s", #x);           \
+      BACKTRACE_RET(ERROR, oceanbase::common::OB_ERROR, 1, "assert fail");                  \
+      assert(v);                                                                            \
+    }                                                                                       \
+  } while(false)
+#endif
 
 #define OB_ASSERT_MSG(x, msg...)                      \
   do{                                                 \
@@ -709,6 +729,13 @@ for (__typeof__((c).at(0)) *it = ((extra_condition) && (c).count() > 0 ? &(c).at
 
 //#define ob_assert(x) OB_ASSERT(x)
 #define ob_assert(x) ob_release_assert(x)
+
+#ifndef ENABLE_DEBUG_LOG
+#define OB_SAFE_ABORT()
+#else
+#define OB_SAFE_ABORT() ob_abort()
+#endif
+
 ////////////////////////////////////////////////////////////////
 // interval
 

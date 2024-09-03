@@ -99,6 +99,13 @@ struct ObColumnResolveStat
   bool is_set_orig_default_value_;
 };
 
+struct ObDefaultValueRes
+{
+  ObDefaultValueRes(common::ObObjParam &value): is_literal_(true), value_(value) {}
+  bool is_literal_;
+  common::ObObjParam &value_;
+};
+
 class ObDDLResolver : public ObStmtResolver
 {
 public:
@@ -165,6 +172,15 @@ public:
   static const int64_t DEFAULT_TABLE_DOP = 1;
   explicit ObDDLResolver(ObResolverParams &params);
   virtual ~ObDDLResolver();
+
+  static int append_vec_args(
+      const ObPartitionResolveResult &resolve_result,
+      const obrpc::ObCreateIndexArg &index_arg,
+      bool &fts_common_aux_table_exist,
+      ObIArray<ObPartitionResolveResult> &resolve_results,
+      ObIArray<obrpc::ObCreateIndexArg> &index_arg_list,
+      ObIAllocator *allocator,
+      const ObSQLSessionInfo *session_info);
   static int append_fts_args(
       const ObPartitionResolveResult &resolve_result,
       const obrpc::ObCreateIndexArg *index_arg,
@@ -219,9 +235,9 @@ public:
       const share::schema::ObColumnSchemaV2 &column_schema);
   int resolve_default_value(
       ParseNode *def_node,
-      common::ObObjParam &default_value);
+      ObDefaultValueRes &resolve_res);
   int resolve_sign_in_default_value(
-      ObIAllocator *name_pool, ParseNode *def_val, ObObjParam &default_value, const bool is_neg);
+      ObIAllocator *name_pool, ParseNode *def_val, ObDefaultValueRes &resolve_res, const bool is_neg);
   static int check_and_fill_column_charset_info(
       share::schema::ObColumnSchemaV2 &column,
       const common::ObCharsetType table_charset_type,
@@ -239,6 +255,7 @@ public:
       const share::schema::ObColumnSchemaV2 &column,
       common::ObObj &default_value);
   static int cast_default_value(
+      ObSQLSessionInfo *session_info,
       common::ObObj &default_value,
       const common::ObTimeZoneInfo *tz_info,
       const common::ObString *nls_formats,
@@ -253,7 +270,7 @@ public:
                                ObIArray<ObString> &gen_col_expr_arr);
   static int init_empty_session(const common::ObTimeZoneInfoWrap &tz_info_wrap,
                                 const ObString *nls_formats,
-                                const share::schema::ObLocalSessionVar *local_session_var,
+                                const ObLocalSessionVar *local_session_var,
                                 common::ObIAllocator &allocator,
                                 share::schema::ObTableSchema &table_schema,
                                 const ObSQLMode sql_mode,
@@ -262,7 +279,7 @@ public:
   static int reformat_generated_column_expr(ObObj &default_value,
                                             const common::ObTimeZoneInfoWrap &tz_info_wrap,
                                             const common::ObString *nls_formats,
-                                            const share::schema::ObLocalSessionVar &local_session_var,
+                                            const ObLocalSessionVar &local_session_var,
                                             common::ObIAllocator &allocator,
                                             share::schema::ObTableSchema &table_schema,
                                             share::schema::ObColumnSchemaV2 &column,
@@ -519,6 +536,16 @@ public:
   int resolve_multivalue_index_constraint(
       const share::schema::ObColumnSchemaV2 &column_schema,
       const int64_t index_keyname_value);
+  int resolve_vec_index_constraint(
+      const share::schema::ObTableSchema &table_schema,
+      ObSchemaChecker &schema_checker,
+      const common::ObString &column_name,
+      const int64_t index_keyname_value,
+      ParseNode *node);
+  int resolve_vec_index_constraint(
+      const share::schema::ObColumnSchemaV2 &column_schema,
+      const int64_t index_keyname_value,
+      ParseNode *node);
 protected:
   static int get_part_str_with_type(
       const bool is_oracle_mode,
@@ -713,6 +740,10 @@ protected:
     int resolve_enum_or_set_column(
       const ParseNode *type_node,
       share::schema::ObColumnSchemaV2 &column);
+    int resolve_collection_column(
+      const ParseNode *type_node,
+      share::schema::ObColumnSchemaV2 &column);
+
 
   static int is_gen_col_with_udf(const ObTableSchema &table_schema,
                                  const ObRawExpr *col_expr,
@@ -952,14 +983,15 @@ protected:
                                                   share::schema::ObTableSchema &table_schema);
 
   int resolve_file_format(const ParseNode *node, ObExternalFileFormat &format);
+  int mask_properties_sensitive_info(const ParseNode *node, ObString &ddl_sql, ObString &masked_sql);
 
   int check_format_valid(const ObExternalFileFormat &format, bool &is_valid);
 
   int deep_copy_string_in_part_expr(ObPartitionedStmt* stmt);
   int deep_copy_column_expr_name(common::ObIAllocator &allocator, ObIArray<ObRawExpr*> &exprs);
   int check_ttl_definition(const ParseNode *node);
-
   int add_new_indexkey_for_oracle_temp_table();
+  int check_index_param(const ParseNode *option_node, ObString &index_params);
 
   void reset();
   int get_mv_container_table(uint64_t tenant_id,
@@ -1033,6 +1065,7 @@ protected:
   bool have_generate_fts_arg_;
   bool is_set_lob_inrow_threshold_;
   int64_t lob_inrow_threshold_;
+  bool have_generate_vec_arg_;
   int64_t auto_increment_cache_size_;
   ObExternalFileFormat::FormatType external_table_format_type_;
   common::ObBitSet<> mocked_external_table_column_ids_;

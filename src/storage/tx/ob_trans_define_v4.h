@@ -432,6 +432,7 @@ public:
                  const int64_t transfer_epoch);
   int find_part(const share::ObLSID ls_id,
                 const int64_t orig_epoch,
+                const int64_t transfer_epoch,
                 ObTxExecPart &part);
 private:
   ObSpinLock lock_;
@@ -693,7 +694,8 @@ public:
   bool support_branch() const { return seq_base_ > 0; }
   // used by SQL alloc branch_id refer the min branch_id allowed
   // because branch_id bellow this is reserved for internal use
-  int branch_id_offset() const { return MAX_CALLBACK_LIST_COUNT; }
+  static int branch_id_offset() { return MAX_CALLBACK_LIST_COUNT; }
+  static bool is_alloced_branch_id(int branch_id) { return branch_id >= branch_id_offset(); }
   int alloc_branch_id(const int64_t count, int16_t &branch_id);
   int fetch_conflict_txs(ObIArray<ObTransIDAndAddr> &array);
   void reset_conflict_txs()
@@ -1119,6 +1121,11 @@ inline ObTxSEQ ObTxDesc::inc_and_get_tx_seq(int16_t branch) const
     return ObTxSEQ::mk_v0(seq);
   }
 }
+
+enum ObTxCleanPolicy {
+  FAST_ROLLBACK = 1, ROLLBACK = 2, KEEP = 3
+};
+
 } // transaction
 } // oceanbase
 

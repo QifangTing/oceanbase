@@ -99,7 +99,8 @@ public:
   int check_trigger_show(const share::schema::ObSessionPrivInfo &s_priv,
                          const common::ObString &db,
                          const common::ObString &trigger,
-                         bool &allow_show) const;
+                         bool &allow_show,
+                         const ObString &table) const;
   int check_column_exists(const uint64_t tenant_id, const uint64_t table_id,
                           const common::ObString &column_name,
                           bool &is_exist,
@@ -184,7 +185,9 @@ public:
                        const common::ObString &database_name,
                        const common::ObString &table_name,
                        const bool is_index_table,
-                       const share::schema::ObTableSchema *&table_schema);
+                       const share::schema::ObTableSchema *&table_schema,
+                       const bool with_hidden_flag = false,
+                       const bool is_built_in_index = false);
   int get_table_schema(const uint64_t tenant_id,
                        const uint64_t database_id,
                        const common::ObString &table_name,

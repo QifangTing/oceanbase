@@ -276,7 +276,8 @@ int ObSchemaChecker::check_routine_show(const share::schema::ObSessionPrivInfo &
 int ObSchemaChecker::check_trigger_show(const share::schema::ObSessionPrivInfo &s_priv,
                                         const ObString &db,
                                         const ObString &trigger,
-                                        bool &allow_show) const
+                                        bool &allow_show,
+                                        const ObString &table) const
 {
   int ret = OB_SUCCESS;
   allow_show = true;
@@ -286,7 +287,25 @@ int ObSchemaChecker::check_trigger_show(const share::schema::ObSessionPrivInfo &
   } else if (OB_UNLIKELY(!s_priv.is_valid() || db.empty() || trigger.empty())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("invalid arguments", K(s_priv), K(db), K(trigger), K(ret));
-  } else {}
+  } else {
+    bool need_check = false;
+    if(OB_FAIL(ObCompatControl::check_feature_enable(s_priv.security_version_,
+                                      ObCompatFeatureType::MYSQL_TRIGGER_PRIV_CHECK, need_check))) {
+      LOG_WARN("failed to check feature enable", K(ret));
+    } else if(need_check && lib::is_mysql_mode()) {
+      ObNeedPriv need_priv;
+      need_priv.priv_level_ = OB_PRIV_TABLE_LEVEL;
+      need_priv.db_ = db;
+      need_priv.priv_set_ = OB_PRIV_TRIGGER;
+      need_priv.table_ = table;
+      OZ (schema_mgr_->check_single_table_priv(s_priv, need_priv));
+      if(OB_FAIL(ret)) {
+        allow_show = false;
+        ret = OB_SUCCESS;
+        LOG_WARN("show create trigger not has trigger priv", K(s_priv), K(db), K(trigger), K(table), K(ret));
+      }
+    }
+  }
   return ret;
 }
 
@@ -739,7 +758,8 @@ int ObSchemaChecker::get_simple_table_schema(
 
 int ObSchemaChecker::get_table_schema(const uint64_t tenant_id, const ObString &database_name,
                                       const ObString &table_name, const bool is_index_table,
-                                      const ObTableSchema *&table_schema)
+                                      const ObTableSchema *&table_schema, const bool with_hidden_flag,
+                                      const bool is_built_in_index)
 {
   int ret = OB_SUCCESS;
   table_schema = NULL;
@@ -752,7 +772,7 @@ int ObSchemaChecker::get_table_schema(const uint64_t tenant_id, const ObString &
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("invalid arguments", K(tenant_id), K(database_name), K(table_name), K(ret));
   } else if (OB_FAIL(schema_mgr_->get_table_schema(tenant_id, database_name, table_name,
-                                            is_index_table, table))) {
+                                            is_index_table, table, with_hidden_flag, is_built_in_index))) {
     LOG_WARN("get table schema failed", K(tenant_id), K(database_name), K(table_name), K(ret));
   } else if (NULL == table) {
     ret = OB_TABLE_NOT_EXIST;

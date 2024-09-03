@@ -20,6 +20,7 @@
 #include "storage/meta_mem/ob_meta_obj_struct.h"
 #include "share/scn.h"
 #include "storage/ddl/ob_ddl_struct.h"
+#include "storage/blocksstable/ob_table_flag.h"
 
 namespace oceanbase
 {
@@ -70,7 +71,13 @@ public:
                    const blocksstable::ObSSTable *first_ddl_sstable,
                    const ObStorageSchema &storage_schema,
                    const int64_t macro_block_column_count,
-                   const int64_t create_schema_version_on_tablet);
+                   const int64_t create_schema_version_on_tablet,
+                   const ObIArray<blocksstable::MacroBlockId> &macro_id_array);
+
+  int init_for_ss_ddl(blocksstable::ObSSTableMergeRes &res,
+                      const ObITable::TableKey &table_key,
+                      const ObStorageSchema &storage_schema,
+                      const int64_t create_schema_version_on_tablet);
 
   // Without checking the validity of the input parameters, necessary to ensure the correctness of the method call.
   int init_for_ha(const blocksstable::ObMigrationSSTableParam &migration_param,
@@ -125,10 +132,12 @@ public:
       K_(encrypt_id),
       K_(master_key_id),
       K_(recycle_version),
+      K_(root_macro_seq),
       K_(nested_offset),
       K_(nested_size),
       KPHEX_(encrypt_key, sizeof(encrypt_key_)),
-      K_(table_flag),
+      K_(table_backup_flag),
+      K_(table_shared_flag),
       K_(uncommitted_tx_id));
 private:
   static const int64_t DEFAULT_MACRO_BLOCK_CNT = 64;
@@ -176,10 +185,12 @@ public:
   int64_t recycle_version_;
   int64_t nested_offset_;
   int64_t nested_size_;
+  int64_t root_macro_seq_;
   char encrypt_key_[share::OB_MAX_TABLESPACE_ENCRYPT_KEY_LENGTH];
   common::ObSEArray<blocksstable::MacroBlockId, DEFAULT_MACRO_BLOCK_CNT> data_block_ids_;
   common::ObSEArray<blocksstable::MacroBlockId, DEFAULT_MACRO_BLOCK_CNT> other_block_ids_;
-  storage::ObTableFlag table_flag_;
+  storage::ObTableBackupFlag table_backup_flag_; //ObTableBackupFlag will be updated by ObSSTableMergeRes
+  storage::ObTableSharedFlag table_shared_flag_; //ObTableSharedFlag will be updated by ObTabletCreateSSTableParam
   int64_t uncommitted_tx_id_;
 };
 

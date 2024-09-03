@@ -25,7 +25,7 @@ namespace blocksstable
 
 class ObTmpFile;
 class ObTmpFileExtent;
-class ObTmpFileIOHandle;
+class ObSSTmpFileIOHandle;
 class ObTmpTenantMacroBlockManager;
 struct ObTmpBlockValueHandle;
 class ObTmpTenantBlockCache;
@@ -248,7 +248,7 @@ public:
       ObTmpFileExtent &extent);
   int free(ObTmpFileExtent *extent);
   int free(const int64_t block_id, const int32_t start_page_id, const int32_t page_nums);
-  int read(ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &handle);
+  int read(ObTmpBlockIOInfo &io_info, ObSSTmpFileIOHandle &handle);
   int write(const ObTmpBlockIOInfo &io_info);
   int wash_block(const int64_t block_id, ObTmpTenantMemBlockManager::ObIOWaitInfoHandle &handle);
   void refresh_memory_limit(const uint64_t tenant_id);
@@ -278,7 +278,7 @@ public:
   int64_t dec_ref();
 
 private:
-  int read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &handle);
+  int read_page(ObTmpMacroBlock *block, ObTmpBlockIOInfo &io_info, ObSSTmpFileIOHandle &handle);
   int free_extent(ObTmpFileExtent *extent);
   int free_extent(const int64_t block_id, const int32_t start_page_id, const int32_t page_nums);
   int free_macro_block(ObTmpMacroBlock *&t_mblk);
@@ -339,7 +339,7 @@ public:
 
   int alloc(const int64_t dir_id, const uint64_t tenant_id, const int64_t size,
       ObTmpFileExtent &extent);
-  int read(const uint64_t tenant_id, ObTmpBlockIOInfo &io_info, ObTmpFileIOHandle &handle);
+  int read(const uint64_t tenant_id, ObTmpBlockIOInfo &io_info, ObSSTmpFileIOHandle &handle);
   int write(const uint64_t tenant_id, const ObTmpBlockIOInfo &io_info);
   int wash_block(const uint64_t tenant_id, const int64_t block_id,
                  ObTmpTenantMemBlockManager::ObIOWaitInfoHandle &handle);

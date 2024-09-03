@@ -19,6 +19,7 @@
 #include "pl/ob_pl.h"
 #include "pl/ob_pl_user_type.h"
 #include "src/pl/ob_pl_resolver.h"
+#include "lib/udt/ob_array_type.h"
 
 using namespace oceanbase::common;
 using namespace oceanbase::sql;
@@ -873,6 +874,35 @@ int ObSqlUdtUtils::convert_sql_udt_to_string(ObObj &sql_udt_obj,
   return ret;
 }
 
+int ObSqlUdtUtils::convert_collection_to_string(ObObj &coll_obj, const ObSqlCollectionInfo &coll_meta,
+                                                common::ObIAllocator *allocator, ObString &res_str)
+{
+  int ret = OB_SUCCESS;
+  ObIArrayType *arr_obj = NULL;
+  ObString coll_data = coll_obj.get_string();
+  ObStringBuffer buf(allocator);
+  ObArenaAllocator lob_allocator(ObModIds::OB_LOB_ACCESS_BUFFER, OB_MALLOC_NORMAL_BLOCK_SIZE, MTL_ID());
+  ObCollectionArrayType *arr_type = static_cast<ObCollectionArrayType *>(coll_meta.collection_meta_);
+  if (OB_FAIL(ObTextStringHelper::read_real_string_data(&lob_allocator,
+                                                        ObLongTextType,
+                                                        CS_TYPE_BINARY,
+                                                        true, coll_data))) {
+    LOG_WARN("fail to get real string data", K(ret), K(coll_data));
+  } else if (OB_FAIL(ObArrayTypeObjFactory::construct(*allocator, *arr_type, arr_obj, true))) {
+    LOG_WARN("construct array obj failed", K(ret),  K(coll_meta));
+  } else {
+    if (OB_FAIL(arr_obj->init(coll_data))) {
+      LOG_WARN("failed to init array", K(ret));
+    } else if (OB_FAIL(arr_obj->print(arr_type->element_type_, buf))) {
+      LOG_WARN("failed to format array", K(ret));
+    } else {
+      res_str.assign_ptr(buf.ptr(), buf.length());
+    }
+  }
+
+  return ret;
+}
+
 int ObSqlUdtUtils::cast_pl_varray_to_sql_varray(common::ObIAllocator &res_allocator,
                                                 ObString &res,
                                                 const ObObj root_obj,
@@ -1504,7 +1534,7 @@ int ObSqlUdtMetaUtils::generate_udt_meta_from_schema(ObSchemaGetterGuard *schema
     udt_meta.udt_id_ = udt_id;
     if (root_udt_info->is_object_type()) {
       pl_type = static_cast<int32_t>(pl::PL_RECORD_TYPE);
-      child_attrs_cnt = root_udt_info->get_local_attrs();
+      child_attrs_cnt = root_udt_info->get_attributes();
     } else if (root_udt_info->is_varray()) {
       pl_type = static_cast<int32_t>(pl::PL_VARRAY_TYPE);
       if (OB_NOT_NULL(root_udt_info->get_coll_info())) {

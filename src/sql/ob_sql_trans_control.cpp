@@ -428,6 +428,7 @@ int ObSqlTransControl::rollback_trans(ObSQLSessionInfo *session,
   return ret;
 }
 
+ERRSIM_POINT_DEF(SQL_DO_END_TX_FAIL)
 int ObSqlTransControl::do_end_trans_(ObSQLSessionInfo *session,
                                      const bool is_rollback,
                                      const bool is_explicit,
@@ -455,6 +456,8 @@ int ObSqlTransControl::do_end_trans_(ObSQLSessionInfo *session,
   if (!session->is_inner() && session->associated_xa() && !is_explicit) {
     ret = OB_TRANS_XA_RMFAIL;
     LOG_ERROR("executing do end trans in xa", K(ret), K(session->get_xid()), KPC(tx_ptr));
+  } else if (OB_FAIL(SQL_DO_END_TX_FAIL)) {
+    LOG_WARN("do end trans failed", K(ret));
   } else {
     /*
      * normal transaction control
@@ -684,6 +687,14 @@ int ObSqlTransControl::dblink_xa_prepare(ObExecContext &exec_ctx)
         } else if (OB_FAIL(session->get_dblink_context().get_dblink_conn(dblink_id, dblink_conn))) {
           LOG_WARN("failed to get dblink connection from session", K(dblink_id), K(sessid), K(ret));
         } else if (OB_NOT_NULL(dblink_conn)) {
+          if (OB_FAIL(ObTMService::tm_rm_start(exec_ctx, // some conn get from session may not in xa trasaction, use tm_rm_start make sure it in xa
+                                              static_cast<common::sqlclient::DblinkDriverProto>(dblink_schema->get_driver_proto()),
+                                              dblink_conn,
+                                              session->get_dblink_context().get_tx_id()))) {
+            LOG_WARN("failed to tm_rm_start", K(ret), K(dblink_id), K(dblink_conn), K(sessid));
+          } else {
+            LOG_TRACE("link succ to prepare xa connection", KP(plan_ctx), K(ret), K(dblink_id));
+          }
           ObDblinkCtxInSession::revert_dblink_conn(dblink_conn); // release rlock locked by get_dblink_conn
         } else {
           common::sqlclient::dblink_param_ctx dblink_param_ctx;
@@ -931,6 +942,16 @@ int ObSqlTransControl::stmt_setup_savepoint_(ObSQLSessionInfo *session,
              K(session->get_txn_free_route_ctx()), KPC(session));       \
   }
 
+#define CHECK_EXPLICIT_SAVEPOINT_TXN_FREE_ROUTE_ALLOWED(savepoint)      \
+  if (OB_SUCC(ret) && !session->is_inner() && session->is_txn_free_route_temp()) { \
+    if (pl::PL_IMPLICIT_SAVEPOINT != savepoint) {                       \
+      ret = OB_TRANS_FREE_ROUTE_NOT_SUPPORTED;                          \
+      LOG_WARN("create savepoint is not allowed executed on txn tmp node", K(ret), \
+               K(savepoint), K(session->get_txn_free_route_ctx()), KPC(session)); \
+    }                                                                   \
+  }
+
+
 #define CHECK_DEFAULT_SAVEPOINTNAME_ALLOWED(sp_name)                            \
   if (OB_SUCC(ret) && (sp_name == DBLINK_DEFAULT_SAVEPOINT || sp_name == PL_DBLINK_DEFAULT_SAVEPOINT)) { \
     ret = OB_ERR_INVALID_CHARACTER_STRING;                              \
@@ -946,7 +967,7 @@ int ObSqlTransControl::create_savepoint(ObExecContext &exec_ctx,
   ObTransService *txs = NULL;
   CK (OB_NOT_NULL(session));
   CHECK_SESSION (session);
-  CHECK_TXN_FREE_ROUTE_ALLOWED();
+  CHECK_EXPLICIT_SAVEPOINT_TXN_FREE_ROUTE_ALLOWED(sp_name);
   OZ (get_tx_service(session, txs));
   OZ (acquire_tx_if_need_(txs, *session));
   // for dblink trans
@@ -1095,7 +1116,7 @@ int ObSqlTransControl::rollback_savepoint(ObExecContext &exec_ctx,
 
   CK (OB_NOT_NULL(session), OB_NOT_NULL(plan_ctx));
   CHECK_SESSION (session);
-  CHECK_TXN_FREE_ROUTE_ALLOWED();
+  CHECK_EXPLICIT_SAVEPOINT_TXN_FREE_ROUTE_ALLOWED(sp_name);
   OZ (get_tx_service(session, txs));
   OZ (acquire_tx_if_need_(txs, *session));
   OX (stmt_expire_ts = get_stmt_expire_ts(plan_ctx, *session));
@@ -1158,7 +1179,7 @@ int ObSqlTransControl::release_savepoint(ObExecContext &exec_ctx,
   ObTransService *txs = NULL;
   CK (OB_NOT_NULL(session));
   CHECK_SESSION (session);
-  CHECK_TXN_FREE_ROUTE_ALLOWED();
+  CHECK_EXPLICIT_SAVEPOINT_TXN_FREE_ROUTE_ALLOWED(sp_name);
   OZ (get_tx_service(session, txs), *session);
   OZ (acquire_tx_if_need_(txs, *session));
   bool start_hook = false;
@@ -1197,7 +1218,7 @@ int ObSqlTransControl::xa_rollback_all_changes(ObExecContext &exec_ctx)
   return ret;
 }
 
-int ObSqlTransControl::end_stmt(ObExecContext &exec_ctx, const bool rollback)
+int ObSqlTransControl::end_stmt(ObExecContext &exec_ctx, const bool rollback, const bool will_retry)
 {
   int ret = OB_SUCCESS;
   DISABLE_SQL_MEMLEAK_GUARD;
@@ -1275,8 +1296,13 @@ int ObSqlTransControl::end_stmt(ObExecContext &exec_ctx, const bool rollback)
       if (need_rollback) {
         const int64_t stmt_expire_ts = get_stmt_expire_ts(plan_ctx, *session);
         const share::ObLSArray &touched_ls = tx_result.get_touched_ls();
-        OZ (txs->rollback_to_implicit_savepoint(*tx_desc, savepoint, stmt_expire_ts, &touched_ls, exec_errcode),
-            savepoint, stmt_expire_ts, touched_ls);
+        const ObTxCleanPolicy policy = decide_stmt_rollback_tx_clean_policy_(exec_errcode, will_retry);
+        OZ (txs->rollback_to_implicit_savepoint(*tx_desc,
+                                                savepoint,
+                                                stmt_expire_ts,
+                                                &touched_ls,
+                                                policy),
+            savepoint, stmt_expire_ts, touched_ls, policy);
         // prioritize returning session error code
         if (session->is_terminate(ret)) {
           LOG_INFO("trans has terminated when end stmt", K(ret), K(tx_id_before_rollback));
@@ -1756,6 +1782,26 @@ int ObSqlTransControl::reset_trans_for_autocommit_lock_conflict(ObExecContext &e
   CK (OB_NOT_NULL(tx_desc = session->get_tx_desc()));
   OZ (tx_desc->clear_state_for_autocommit_retry());
   return ret;
+}
+
+transaction::ObTxCleanPolicy
+ObSqlTransControl::decide_stmt_rollback_tx_clean_policy_(const int error_code, const bool will_retry)
+{
+  transaction::ObTxCleanPolicy policy = transaction::ObTxCleanPolicy::FAST_ROLLBACK;
+  switch (error_code) {
+  case OB_TRANSACTION_SET_VIOLATION:
+  case OB_TRY_LOCK_ROW_CONFLICT:
+    // do not rollback transaction
+    policy = transaction::ObTxCleanPolicy::KEEP;
+    break;
+  default:
+    if (will_retry) {
+      // rolblack transaction, also rollback write-set
+      policy = transaction::ObTxCleanPolicy::ROLLBACK;
+    }
+    break;
+  }
+  return policy;
 }
 
 }/* ns sql*/

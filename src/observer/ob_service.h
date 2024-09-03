@@ -126,6 +126,7 @@ public:
   int calc_column_checksum_request(const obrpc::ObCalcColumnChecksumRequestArg &arg, obrpc::ObCalcColumnChecksumRequestRes &res);
   int build_ddl_single_replica_request(const obrpc::ObDDLBuildSingleReplicaRequestArg &arg, obrpc::ObDDLBuildSingleReplicaRequestResult &res);
   int check_and_cancel_ddl_complement_data_dag(const obrpc::ObDDLBuildSingleReplicaRequestArg &arg, bool &is_dag_exist);
+  int check_and_cancel_delete_lob_meta_row_dag(const obrpc::ObDDLBuildSingleReplicaRequestArg &arg, bool &is_dag_exist);
   int stop_partition_write(const obrpc::Int64 &switchover_timestamp, obrpc::Int64 &result);
   int check_partition_log(const obrpc::Int64 &switchover_timestamp, obrpc::Int64 &result);
   int get_wrs_info(const obrpc::ObGetWRSArg &arg, obrpc::ObGetWRSResult &result);
@@ -162,6 +163,8 @@ public:
                                   obrpc::ObEstBlockRes &res) const;
   int update_tenant_info_cache(const obrpc::ObUpdateTenantInfoCacheArg &arg,
                                   obrpc::ObUpdateTenantInfoCacheRes &result);
+  int refresh_service_name(const obrpc::ObRefreshServiceNameArg &arg,
+                           obrpc::ObRefreshServiceNameRes &result);
   ////////////////////////////////////////////////////////////////
   // ObRpcMinorFreezeP @RS minor freeze
   int minor_freeze(const obrpc::ObMinorFreezeArg &arg,
@@ -191,10 +194,10 @@ public:
   ////////////////////////////////////////////////////////////////
   // ObRpcBootstrapP @RS bootstrap
   int bootstrap(const obrpc::ObBootstrapArg &arg);
-  // ObRpcCheckServerForAddingServerP @RS add server
-  int check_server_for_adding_server(
-      const obrpc::ObCheckServerForAddingServerArg &arg,
-      obrpc::ObCheckServerForAddingServerResult &result);
+  // ObRpcPrepareServerForAddingServerP @RS add server
+  int prepare_server_for_adding_server(
+      const obrpc::ObPrepareServerForAddingServerArg &arg,
+      obrpc::ObPrepareServerForAddingServerResult &result);
   // ObRpcGetServerStatusP @RS
   int get_server_resource_info(const obrpc::ObGetServerResourceInfoArg &arg, obrpc::ObGetServerResourceInfoResult &result);
   int get_server_resource_info(share::ObServerResourceInfo &resource_info);
@@ -203,8 +206,12 @@ public:
   static int do_remove_ls_paxos_replica(const obrpc::ObLSDropPaxosReplicaArg &arg);
   static int do_remove_ls_nonpaxos_replica(const obrpc::ObLSDropNonPaxosReplicaArg &arg);
   static int do_add_ls_replica(const obrpc::ObLSAddReplicaArg &arg);
+  // ObRpcCheckServerEmptyP @RS bootstrap
+  int check_server_empty(const obrpc::ObCheckServerEmptyArg &arg, obrpc::Bool &is_empty);
+  int check_server_empty_with_result(const obrpc::ObCheckServerEmptyArg &arg, obrpc::ObCheckServerEmptyResult &result);
+  static int do_migrate_ls_replica(const obrpc::ObLSMigrateReplicaArg &arg);
   // ObRpcIsEmptyServerP @RS bootstrap
-  int is_empty_server(const obrpc::ObCheckServerEmptyArg &arg, obrpc::Bool &is_empty);
+
   // ObRpcCheckDeploymentModeP
   int check_deployment_mode_match(const obrpc::ObCheckDeploymentModeArg &arg, obrpc::Bool &match);
   int get_leader_locations(
@@ -263,16 +270,15 @@ public:
   int handle_heartbeat(
       const share::ObHBRequest &hb_request,
       share::ObHBResponse &hb_response);
+  int check_storage_operation_status(
+      const obrpc::ObCheckStorageOperationStatusArg &arg,
+      obrpc::ObCheckStorageOperationStatusResult &result);
   int ob_admin_unlock_member_list(
       const obrpc::ObAdminUnlockMemberListOpArg &arg);
   int check_server_empty(bool &server_empty);
+  int change_external_storage_dest(obrpc::ObAdminSetConfigArg &arg);
 
 private:
-  int get_role_from_palf_(
-      logservice::ObLogService &log_service,
-      const share::ObLSID &ls_id,
-      common::ObRole &role,
-      int64_t &proposal_id);
   int inner_fill_tablet_info_(
       const int64_t tenant_id,
       const ObTabletID &tablet_id,
@@ -281,6 +287,7 @@ private:
       share::ObTabletReplicaChecksumItem &tablet_checksum,
       const bool need_checksum);
   int register_self();
+  int set_server_id_(const int64_t server_id);
 
   int handle_server_freeze_req_(const obrpc::ObMinorFreezeArg &arg);
   int handle_tenant_freeze_req_(const obrpc::ObMinorFreezeArg &arg);

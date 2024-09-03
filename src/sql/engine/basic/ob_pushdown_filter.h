@@ -23,6 +23,7 @@
 #include "sql/engine/expr/ob_expr.h"
 #include "sql/engine/expr/ob_expr_in.h"
 #include "sql/engine/ob_operator.h"
+#include "src/sql/engine/px/p2p_datahub/ob_small_hashset.h"
 
 namespace oceanbase
 {
@@ -248,6 +249,7 @@ public:
       : alloc_(alloc), type_(type), n_child_(0), childs_(nullptr),
       col_ids_(alloc)
   {}
+  virtual ~ObPushdownFilterNode() {}
   PushdownFilterType get_type() const { return type_; }
   common::ObIArray<uint64_t> &get_col_ids() { return col_ids_; }
   void set_type(PushdownFilterType type) { type_ = type; }
@@ -458,6 +460,7 @@ public:
             ObPushdownFilterNode &filter_node,
             ObPushdownFilterExecutor *&filter_executor,
             ObPushdownOperator &op);
+  int convert_white_filter_to_black(ObPushdownFilterExecutor *&filter);
 
 private:
   // pushdown filter
@@ -659,7 +662,8 @@ public:
   OB_INLINE void set_filter_rewrited() { is_rewrited_ = true; }
   OB_INLINE bool is_filter_rewrited() const { return is_rewrited_; }
   OB_INLINE int64_t get_skipped_rows() const { return skipped_rows_; }
-  OB_INLINE void clear_skipped_rows() { skipped_rows_ = 0; };
+  OB_INLINE void clear_skipped_rows() { skipped_rows_ = 0; }
+  OB_INLINE common::ObIAllocator &get_allocator() { return allocator_; }
   inline int get_child(uint32_t nth_child, ObPushdownFilterExecutor *&filter_executor)
   {
     int ret = common::OB_SUCCESS;
@@ -692,7 +696,7 @@ public:
   int pull_up_common_node(
       const common::ObIArray<uint32_t> &filter_indexes,
       ObPushdownFilterExecutor *&common_filter_executor);
-  virtual int init_evaluated_datums() { return common::OB_NOT_SUPPORTED; }
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) { return common::OB_NOT_SUPPORTED; }
   int execute(
       ObPushdownFilterExecutor *parent,
       PushdownFilterInfo &filter_info,
@@ -758,7 +762,7 @@ public:
   {}
   virtual ~ObPhysicalFilterExecutor();
   int filter(blocksstable::ObStorageDatum *datums, int64_t col_cnt, const sql::ObBitVector &skip_bit, bool &ret_val);
-  virtual int init_evaluated_datums() override;
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) override;
   virtual int filter(ObEvalCtx &eval_ctx, const sql::ObBitVector &skip_bit, bool &filtered) = 0;
   INHERIT_TO_STRING_KV("ObPhysicalFilterExecutor", ObPushdownFilterExecutor,
                        K_(n_eval_infos), KP_(eval_infos));
@@ -923,6 +927,59 @@ private:
   ObDatumCmpFuncType cmp_func_;
 };
 
+class ObWhiteFilterSmallHashSet
+{
+public:
+  ObWhiteFilterSmallHashSet() : set_(), hash_func_(nullptr) {}
+  ~ObWhiteFilterSmallHashSet()
+  {
+    destroy();
+  }
+  void destroy()
+  {
+    set_.destroy();
+  }
+  inline bool created() const
+  {
+    return set_.inited();
+  }
+  inline int create(int param_num, const ObExprHashFuncType hash_func)
+  {
+    hash_func_ = hash_func;
+    return set_.init(param_num, MTL_ID());
+  }
+  inline int64_t count() const
+  {
+    return set_.size();
+  }
+  inline int insert_datum(const ObDatum &datum)
+  {
+    int ret = OB_SUCCESS;
+    uint64_t hash_val;
+    if (OB_FAIL(hash_func_(datum, 0, hash_val))) {
+      STORAGE_LOG(WARN, "Failed to do hash for datum", K(datum));
+    } else {
+      ret = set_.insert_hash(hash_val);
+    }
+    return ret;
+  }
+  inline int exist_datum(const ObDatum &datum, bool &is_exist) const
+  {
+    int ret = OB_SUCCESS;
+    uint64_t hash_val;
+    if (OB_FAIL(hash_func_(datum, 0, hash_val))) {
+      STORAGE_LOG(WARN, "Failed to do hash for datum", K(datum));
+    } else {
+      is_exist = set_.test_hash(hash_val);
+    }
+    return ret;
+  }
+private:
+  ObSmallHashSet<false> set_;
+  ObExprHashFuncType hash_func_;
+  // TODO: add batch hash and batch insert
+};
+
 class ObWhiteFilterExecutor : public ObPhysicalFilterExecutor
 {
 public:
@@ -930,9 +987,9 @@ public:
                         ObPushdownWhiteFilterNode &filter,
                         ObPushdownOperator &op)
       : ObPhysicalFilterExecutor(alloc, op, PushdownExecutorType::WHITE_FILTER_EXECUTOR),
-        cmp_func_(nullptr), cmp_func_rev_(nullptr), null_param_contained_(false), datum_params_(alloc), filter_(filter)
+        cmp_func_(nullptr), null_param_contained_(false), datum_params_(alloc), filter_(filter)
       {}
-  ~ObWhiteFilterExecutor()
+  virtual ~ObWhiteFilterExecutor()
   {
     datum_params_.reset();
     param_set_.destroy();
@@ -943,7 +1000,7 @@ public:
   OB_INLINE virtual common::ObIArray<uint64_t> &get_col_ids() override
   { return filter_.get_col_ids(); }
   virtual const common::ObIArray<ObExpr *> *get_cg_col_exprs() const override { return &filter_.column_exprs_; }
-  virtual int init_evaluated_datums() override;
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) override;
   OB_INLINE const common::ObIArray<common::ObDatum> &get_datums() const
   { return datum_params_; }
   OB_INLINE const common::ObDatum &get_min_param() const
@@ -951,7 +1008,7 @@ public:
   OB_INLINE const common::ObDatum &get_max_param() const
   { return datum_params_.at(datum_params_.count() - 1); }
   OB_INLINE bool null_param_contained() const { return null_param_contained_; }
-  int exist_in_datum_set(const common::ObDatum &datum, bool &is_exist) const;
+  virtual int exist_in_set(const common::ObDatum &datum, bool &is_exist) const;
   int exist_in_datum_array(const common::ObDatum &datum, bool &is_exist, const int64_t offset = 0) const;
   OB_INLINE ObWhiteFilterOperatorType get_op_type() const
   { return filter_.get_op_type(); }
@@ -960,6 +1017,7 @@ public:
                        K_(null_param_contained), K_(datum_params), K_(param_set),
                        K_(filter));
   virtual int filter(ObEvalCtx &eval_ctx, const sql::ObBitVector &skip_bit, bool &filtered) override;
+  virtual void clear() override;
   virtual void clear_in_datums()
   {
     if (WHITE_OP_IN == filter_.get_op_type()) {
@@ -972,13 +1030,12 @@ protected:
   {
     return datum.is_null() || (lib::is_oracle_mode() && obj_meta.is_character_type() && (0 == datum.len_));
   }
-  int init_compare_eval_datums();
-  int init_in_eval_datums();
+  int init_compare_eval_datums(bool &need_convert);
+  int init_in_eval_datums(bool &need_convert);
   int init_param_set(const int64_t count, const ObExpr *cur_arg);
   int add_to_param_set_and_array(const ObDatum &datum, const ObExpr *cur_arg);
 public:
   common::ObDatumCmpFuncType cmp_func_;
-  common::ObDatumCmpFuncType cmp_func_rev_;
 protected:
   bool null_param_contained_;
   common::ObFixedArray<common::ObDatum, common::ObIAllocator> datum_params_;
@@ -997,7 +1054,7 @@ public:
   OB_INLINE ObPushdownAndFilterNode &get_filter_node() { return filter_; }
   OB_INLINE virtual common::ObIArray<uint64_t> &get_col_ids() override
   { return filter_.get_col_ids(); }
-  virtual int init_evaluated_datums() override;
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) override;
   INHERIT_TO_STRING_KV("ObPushdownAndFilterExecutor", ObPushdownFilterExecutor, K_(filter));
 private:
   ObPushdownAndFilterNode &filter_;
@@ -1015,7 +1072,7 @@ public:
   OB_INLINE ObPushdownOrFilterNode &get_filter_node() { return filter_; }
   OB_INLINE virtual common::ObIArray<uint64_t> &get_col_ids() override
   { return filter_.get_col_ids(); }
-  virtual int init_evaluated_datums() override;
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) override;
   INHERIT_TO_STRING_KV("ObPushdownOrFilterExecutor", ObPushdownFilterExecutor, K_(filter));
 private:
   ObPushdownOrFilterNode &filter_;
@@ -1037,6 +1094,8 @@ public:
         filter_action_(DO_FILTER),
         stored_data_version_(0)
   {}
+  ~ObDynamicFilterExecutor()
+  {}
   OB_INLINE ObPushdownDynamicFilterNode &get_filter_node()
   {
     return static_cast<ObPushdownDynamicFilterNode &>(filter_);
@@ -1045,7 +1104,7 @@ public:
   {
     return static_cast<const ObPushdownDynamicFilterNode &>(filter_);
   }
-  virtual int init_evaluated_datums() override;
+  virtual int init_evaluated_datums(common::ObIAllocator *allocator, bool &need_convert) override;
   int check_runtime_filter(ObPushdownFilterExecutor* parent_filter, bool &is_needed);
   void filter_on_bypass(ObPushdownFilterExecutor* parent_filter);
   void filter_on_success(ObPushdownFilterExecutor* parent_filter);
@@ -1054,6 +1113,9 @@ public:
     return static_cast<const ObPushdownDynamicFilterNode *>(&filter_)->get_col_idx();
   }
   void locate_runtime_filter_ctx();
+  int init_small_set(const int64_t count, const ObExprHashFuncType hash_func);
+  int add_to_small_set(const ObDatum &datum);
+  virtual int exist_in_set(const common::ObDatum &datum, bool &is_exist) const override final;
   inline void set_filter_val_meta(const ObObjMeta &val_meta_)
   {
     return static_cast<ObPushdownDynamicFilterNode &>(filter_).set_filter_val_meta(val_meta_);
@@ -1077,6 +1139,16 @@ public:
     // for topn sort runtime filter, the filter can not do continuouly check
     return DynamicFilterType::PD_TOPN_FILTER != get_filter_node().get_dynamic_filter_type();
   }
+  inline const ObWhiteFilterSmallHashSet &get_small_set() const {return small_set_;}
+  void clear() override;
+  void clear_in_datums()
+  {
+    if (WHITE_OP_IN == filter_.get_op_type()) {
+      datum_params_.clear();
+      param_set_.destroy();
+      small_set_.destroy();
+    }
+  }
   INHERIT_TO_STRING_KV("ObDynamicFilterExecutor", ObWhiteFilterExecutor, K_(is_data_prepared),
                        K_(batch_cnt), KP_(runtime_filter_ctx));
 public:
@@ -1093,6 +1165,8 @@ public:
                                  bool &is_update);
   static PreparePushdownDataFunc PREPARE_PD_DATA_FUNCS[DynamicFilterType::MAX_DYNAMIC_FILTER_TYPE];
   static UpdatePushdownDataFunc UPDATE_PD_DATA_FUNCS[DynamicFilterType::MAX_DYNAMIC_FILTER_TYPE];
+public:
+  ObExprHashFuncType hash_func_;
 
 private:
   int try_preparing_data();
@@ -1108,6 +1182,7 @@ private:
   // for topn runtime filter, we need continuosly update the dynamic filter data
   // stored_data_version_ means the data version now the dynamic filter use
   int64_t stored_data_version_;
+  ObWhiteFilterSmallHashSet small_set_;
 };
 
 class ObFilterExecutorConstructor

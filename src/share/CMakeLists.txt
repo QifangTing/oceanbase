@@ -1,14 +1,19 @@
 ob_set_subtarget(ob_share ALONE
-  ob_rpc_struct.cpp
-  ob_tenant_mgr.cpp
-  datum/ob_datum_funcs.cpp
-  schema/ob_schema_service_sql_impl.cpp
-  parameter/ob_parameter_attr.cpp
-  vector/expr_cmp_func.cpp
-  aggregate/sum.cpp
+  aggregate/approx_count_distinct.cpp
+  aggregate/count.cpp
+  aggregate/iaggregate.cpp
+  aggregate/min_max.cpp
   aggregate/processor.cpp
   aggregate/single_row.cpp
-  aggregate/approx_count_distinct.cpp
+  aggregate/sum.cpp
+  aggregate/sys_bit.cpp
+  aggregate/aggr_extra.cpp
+  datum/ob_datum_funcs.cpp
+  ob_rpc_struct.cpp
+  ob_tenant_mgr.cpp
+  parameter/ob_parameter_attr.cpp
+  schema/ob_schema_service_sql_impl.cpp
+  vector/expr_cmp_func.cpp
 )
 
 file(GLOB SCHEMA_CPPS "inner_table/ob_inner_table_schema.*.cpp")
@@ -123,7 +128,6 @@ ob_set_subtarget(ob_share common
   ob_list_parser.cpp
   ob_local_device.cpp
   ob_locality_info.cpp
-  ob_locality_parser.cpp
   ob_locality_priority.cpp
   ob_locality_table_operator.cpp
   ob_ls_id.cpp
@@ -146,6 +150,7 @@ ob_set_subtarget(ob_share common
   ob_server_blacklist.cpp
   ob_server_locality_cache.cpp
   ob_server_status.cpp
+  ob_server_struct.cpp
   ob_server_table_operator.cpp
   ob_service_epoch_proxy.cpp
   ob_share_util.cpp
@@ -185,13 +190,15 @@ ob_set_subtarget(ob_share common
   ob_inner_kv_table_operator.cpp
   ob_inner_table_operator.cpp
   ob_standby_upgrade.cpp
-  ob_primary_standby_service.cpp
   ob_common_id.cpp
   ob_cluster_event_history_table_operator.cpp
   scn.cpp
   ob_throttling_utils.cpp
   ob_storage_ha_diagnose_struct.cpp
   ob_storage_ha_diagnose_operator.cpp
+  ob_vec_index_builder_util.cpp
+  ob_domain_index_builder_util.cpp
+  ob_service_name_proxy.cpp
   ob_compatibility_control.cpp
 )
 
@@ -287,6 +294,10 @@ ob_set_subtarget(ob_share common_mixed
   compaction/ob_table_ckm_items.cpp
   compaction/ob_compaction_time_guard.cpp
   compaction/ob_schedule_batch_size_mgr.cpp
+  compaction/ob_compaction_timer_task_mgr.cpp
+  compaction/ob_batch_exec_dag.cpp
+  compaction/ob_new_micro_info.cpp
+  storage/ob_i_pre_warmer.cpp
   partition_table/ob_partition_location.cpp
   longops_mgr/ob_ddl_longops.cpp
   longops_mgr/ob_i_longops.cpp
@@ -296,6 +307,7 @@ ob_set_subtarget(ob_share common_mixed
   throttle/ob_share_throttle_define.cpp
   throttle/ob_throttle_common.cpp
   restore/ob_restore_data_mode.cpp
+  rebuild_tablet/ob_rebuild_tablet_location.cpp
 )
 
 ob_set_subtarget(ob_share tablet
@@ -511,6 +523,8 @@ ob_set_subtarget(ob_share io
   io/ob_io_struct.cpp
   io/ob_io_calibration.cpp
   io/ob_io_manager.cpp
+  io/ob_storage_io_usage_proxy.cpp
+  io/ob_storage_io_usage_reporter.cpp
 )
 
 ob_set_subtarget(ob_share unit
@@ -555,8 +569,19 @@ ob_set_subtarget(ob_share wr
   wr/ob_wr_collector.cpp
 )
 
+ob_set_subtarget(ob_share object_storage
+  object_storage/ob_device_config_mgr.cpp
+  object_storage/ob_device_config_parser.cpp
+  object_storage/ob_device_connectivity.cpp
+  object_storage/ob_device_manifest.cpp
+  object_storage/ob_device_manifest_task.cpp
+  object_storage/ob_zone_storage_table_operation.cpp
+  object_storage/ob_object_storage_struct.cpp
+)
+
 ob_set_subtarget(ob_share vector
   vector/ob_vector_base.cpp
+  vector/vector_basic_op.cpp
   vector/ob_fixed_length_vector.cpp
   vector/ob_continuous_vector.cpp
   vector/ob_discrete_vector.cpp
@@ -567,11 +592,22 @@ ob_set_subtarget(ob_share vector
   vector/ob_continuous_base.cpp
 )
 
-ob_set_subtarget(ob_share aggregate
-  aggregate/iaggregate.cpp
-  aggregate/count.cpp
-  aggregate/min_max.cpp
-  aggregate/sys_bit.cpp
+ob_set_subtarget(ob_share vector_index
+  vector_index/ob_plugin_vector_index_adaptor.cpp
+  vector_index/ob_plugin_vector_index_util.cpp
+  vector_index/ob_plugin_vector_index_scheduler.cpp
+  vector_index/ob_plugin_vector_index_service.cpp
+  vector_index/ob_plugin_vector_index_serialize.cpp
+  vector_index/ob_plugin_vector_index_utils.cpp
+  vector_index/ob_vector_index_util.cpp
+)
+
+ob_set_subtarget(ob_share vector_type
+  vector_type/ob_vector_l2_distance.cpp
+  vector_type/ob_vector_ip_distance.cpp
+  vector_type/ob_vector_cosine_distance.cpp
+  vector_type/ob_vector_l1_distance.cpp
+  vector_type/ob_vector_norm.cpp
 )
 
 ob_add_new_object_target(ob_share ob_share)

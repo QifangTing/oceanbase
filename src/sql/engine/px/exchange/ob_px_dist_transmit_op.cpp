@@ -116,6 +116,15 @@ int ObPxDistTransmitOp::next_batch(const int64_t max_row_cnt)
         }
       }
     }
+    // must restire holder after sampling
+    // otherwise data ptr is not reset to frame, table scan may fail.
+    if (OB_SUCC(ret) && brs_holder_.is_saved()) {
+      if (OB_FAIL(brs_holder_.restore())) {
+        LOG_WARN("store holder failed", K(ret));
+      } else {
+        brs_holder_.reset();
+      }
+    }
   } else {
     if (brs_holder_.is_saved()) {
       OZ(brs_holder_.restore());
@@ -421,7 +430,7 @@ int ObPxDistTransmitOp::do_range_dist()
     ObPxSqcHandler *handler = ctx_.get_sqc_handler();
     range = handler->get_partition_ranges().empty() ? NULL : &handler->get_partition_ranges().at(0);
     ObRangeSliceIdCalc slice_id_calc(ctx_.get_allocator(), task_channels_.count(),
-      range, &MY_SPEC.dist_exprs_, MY_SPEC.sort_cmp_funs_, MY_SPEC.sort_collations_);
+      range, &MY_SPEC.dist_exprs_, MY_SPEC.sort_cmp_funs_, MY_SPEC.sort_collations_, MY_SPEC.ddl_slice_id_expr_);
     if (ObPxSampleType::OBJECT_SAMPLE == MY_SPEC.sample_type_) {
       if (OB_FAIL(child_->rescan())) {
         LOG_WARN("fail to rescan child", K(ret));
@@ -901,7 +910,7 @@ int ObPxDistTransmitOp::add_batch_row_for_piece_msg_vec(ObChunkDatumStore &sampl
         if (cnt > 0) {
           ret = inner_get_next_batch(cnt);
           FOREACH_CNT_X(e, MY_SPEC.sampling_saving_row_, OB_SUCC(ret)) {
-            if (OB_FAIL((*e)->cast_to_uniform(brs_.size_, eval_ctx_))) {
+            if (OB_FAIL((*e)->cast_to_uniform(brs_.size_, eval_ctx_, brs_.skip_))) {
               LOG_WARN("cast expr to uniform failed", K(ret), KPC(*e), K_(eval_ctx));
             }
           }

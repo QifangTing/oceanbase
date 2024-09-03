@@ -37,7 +37,7 @@
 #include "pl/ob_pl_resolver.h"
 #include "sql/ob_sql_utils.h"
 #include "share/ob_get_compat_mode.h"
-
+#include "share/schema/ob_mview_info.h"
 
 
 namespace oceanbase
@@ -337,6 +337,11 @@ int ObSchemaPrinter::print_table_definition_columns(const ObTableSchema &table_s
                     SHARE_SCHEMA_LOG(WARN, "fail to print DEFAULT now()", K(ret));
                   }
                 }
+              } else if (col->is_default_expr_v2_column()) {
+                ObString default_value = col->get_cur_default_value().get_string();
+                if (OB_FAIL(databuff_printf(buf, buf_len, pos, " DEFAULT (%.*s)", default_value.length(), default_value.ptr()))) {
+                  SHARE_SCHEMA_LOG(WARN, "fail to print sql literal", K(default_value), K(ret));
+                }
               } else {
                 if (OB_FAIL(databuff_printf(buf, buf_len, pos, " DEFAULT "))) {
                   SHARE_SCHEMA_LOG(WARN, "fail to print DEFAULT", K(ret));
@@ -499,7 +504,9 @@ int ObSchemaPrinter::print_generated_column_definition(const ObColumnSchemaV2 &g
   sql::ObRawExpr *expr = NULL;
   ObTimeZoneInfo tz_infos;
   sql::ObRawExprPrinter raw_printer(buf, buf_len, &pos, &schema_guard_, &tz_infos);
-  SMART_VAR(sql::ObSQLSessionInfo, session) {
+  SMART_VARS_3((sql::ObSQLSessionInfo, session), (ObExecContext, exec_ctx, allocator),
+               (ObPhysicalPlanCtx, phy_plan_ctx, allocator)) {
+    LinkExecCtxGuard link_guard(session, exec_ctx);
     if (OB_FAIL(databuff_printf(buf, buf_len, pos, " GENERATED ALWAYS AS ("))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print keywords", K(ret));
     } else if (OB_FAIL(gen_col.get_cur_default_value().get_string(expr_str))) {
@@ -513,6 +520,8 @@ int ObSchemaPrinter::print_generated_column_definition(const ObColumnSchemaV2 &g
       /* bug:
         构建ObRawExpr对象,当 expr_str = "CONCAT(first_name,' ',last_name)"
         避免错误的打印成： CONCAT(first_name,\' \',last_name) */
+    } else if (FALSE_IT(exec_ctx.set_physical_plan_ctx(&phy_plan_ctx))) {
+    } else if (FALSE_IT(exec_ctx.set_my_session(&session))) {
     } else if(OB_FAIL(sql::ObRawExprUtils::build_generated_column_expr(NULL,
                                                                        expr_str,
                                                                        expr_factory,
@@ -529,6 +538,7 @@ int ObSchemaPrinter::print_generated_column_definition(const ObColumnSchemaV2 &g
                                           " VIRTUAL" : " STORED"))) {
       SHARE_SCHEMA_LOG(WARN, "print virtual keyword failed", K(ret));
     }
+    exec_ctx.set_physical_plan_ctx(NULL);
   }
   return ret;
 }
@@ -626,6 +636,10 @@ int ObSchemaPrinter::print_single_index_definition(const ObTableSchema *index_sc
             SHARE_SCHEMA_LOG(WARN, "fail to print UNIQUE KEY", K(ret));
           }
         }
+      } else if (index_schema->is_vec_index()) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " VECTOR KEY "))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print VECTOR KEY", K(ret));
+        }
       } else if (index_schema->is_fts_index()) {
         if (OB_FAIL(databuff_printf(buf, buf_len, pos, " FULLTEXT KEY "))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print FULLTEXT KEY", K(ret));
@@ -671,6 +685,8 @@ int ObSchemaPrinter::print_single_index_definition(const ObTableSchema *index_sc
             // skip doc id for fts index.
           } else if (index_schema->is_multivalue_index_aux() && col->is_doc_id_column()) {
             // skip doc id for multivalue index.
+          } else if (index_schema->is_vec_index() && (col->is_vec_vid_column())) {
+            // only need vec_type column to show index key, here skip vec_vid column of delta_buffer_table rowkey column
           } else if (!col->is_shadow_column()) {
             const ObColumnSchemaV2 *tmp_column = NULL;
             if (index_schema->is_multivalue_index_aux() &&
@@ -706,7 +722,7 @@ int ObSchemaPrinter::print_single_index_definition(const ObTableSchema *index_sc
         }
         // show storing columns in index
         if (OB_SUCC(ret) && !strict_compat_ && !is_no_key_options(sql_mode)
-            && !index_schema->is_fts_index() && !index_schema->is_multivalue_index()) {
+            && !index_schema->is_fts_index() && !index_schema->is_multivalue_index() && !index_schema->is_vec_index()) {
           int64_t column_count = index_schema->get_column_count();
           if (column_count >= rowkey_count) {
             bool first_storing_column = true;
@@ -818,8 +834,10 @@ int ObSchemaPrinter::print_table_definition_indexes(const ObTableSchema &table_s
                                   index_schema->is_global_local_index_table())) {
       // For strictly compatible with MySQL,
       // Do not print global index.
-    } else if (index_schema->is_built_in_fts_index()) {
-      // For full-text search index, only inverted table can be printed, and others table will not be printed.
+    } else if (index_schema->is_built_in_index()) {
+      // For full-text or vector index search index, only inverted table can be printed, and others table will not be printed.
+    } else if (index_schema->is_vec_index() && index_schema->get_index_status() != INDEX_STATUS_AVAILABLE) {
+      // Not show vec index which in unavaliable status
     } else if (OB_FAIL(print_single_index_definition(index_schema, table_schema, arena_allocator,
                        buf, buf_len, pos, is_unique_index, is_oracle_mode, false, sql_mode, tz_info))) {
       LOG_WARN("print single index definition failed", K(ret));
@@ -935,6 +953,50 @@ int ObSchemaPrinter::print_table_definition_constraints(const ObTableSchema &tab
     }
   }
 
+  return ret;
+}
+
+int ObSchemaPrinter::print_vector_index_column(const ObTableSchema &table_schema,
+                                               const ObColumnSchemaV2 &column,
+                                               bool is_last,
+                                               char *buf,
+                                               int64_t buf_len,
+                                               int64_t &pos) const
+{
+  int ret = OB_SUCCESS;
+
+  ObArray<uint64_t> ctxcat_ids;
+  ObArenaAllocator allocator(ObModIds::OB_SCHEMA);
+  const ObColumnSchemaV2 *table_column = table_schema.get_column_schema(column.get_column_id());
+  bool is_oracle_mode = false;
+  if (OB_FAIL(table_schema.check_if_oracle_compat_mode(is_oracle_mode))) {
+    LOG_WARN("fail to check oracle mode", KR(ret), K(table_schema));
+  } else if (OB_ISNULL(table_column)) {
+    ret = OB_ERR_UNEXPECTED;
+    STORAGE_LOG(WARN, "The column schema is NULL, ", K(ret));
+  } else if (OB_FAIL(table_column->get_cascaded_column_ids(ctxcat_ids))) {
+    STORAGE_LOG(WARN, "Failed to get cascaded column ids", K(ret));
+  } else {
+    for (int64_t j = 0; OB_SUCC(ret) && j < ctxcat_ids.count(); ++j) {
+      const ObColumnSchemaV2 *ctxcat_column = NULL;
+      ObString new_col_name;
+      if (OB_ISNULL(ctxcat_column = table_schema.get_column_schema(ctxcat_ids.at(j)))) {
+        ret = OB_ERR_UNEXPECTED;
+        STORAGE_LOG(WARN, "The column schema is NULL, ", K(ret));
+      } else if (OB_FAIL(sql::ObSQLUtils::generate_new_name_with_escape_character(
+                 allocator,
+                 ctxcat_column->get_column_name_str(),
+                 new_col_name,
+                 is_oracle_mode))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to generate new name with escape character", K(ret), K(ctxcat_column->get_column_name_str()));
+      } else if (OB_FAIL(print_identifier(buf, buf_len, pos, new_col_name, is_oracle_mode))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print column name", K(ret), K(column));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos,
+                                         is_last && j == ctxcat_ids.count() - 1 ? ")" : ", "))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print column name", K(ret), K(column));
+      } else { /*do nothing*/ }
+    }
+  }
   return ret;
 }
 
@@ -1144,7 +1206,16 @@ int ObSchemaPrinter::print_index_column(const ObTableSchema &table_schema,
   if (OB_FAIL(table_schema.check_if_oracle_compat_mode(is_oracle_mode))) {
     LOG_WARN("fail to check oracle mode", KR(ret), K(table_schema));
   } else if (column.is_hidden() && column.is_generated_column()) { //automatic generated column
-    if (column.is_fulltext_column()) {
+    if (column.is_vec_index_column()) {
+      if (OB_FAIL(print_vector_index_column(table_schema,
+                                            column,
+                                            is_last,
+                                            buf,
+                                            buf_len,
+                                            pos))) {
+        LOG_WARN("print fulltext index column failed", K(ret));
+      }
+    } else if (column.is_fulltext_column()) {
       if (OB_FAIL(print_fulltext_index_column(table_schema,
                                               column,
                                               is_last,
@@ -1737,6 +1808,14 @@ int ObSchemaPrinter::print_table_definition_table_options(const ObTableSchema &t
       SHARE_SCHEMA_LOG(WARN, "print parser name failed", K(ret), K(parser));
     }
   }
+  if (OB_SUCC(ret) && table_schema.is_vec_index()) {
+    const ObString &vector_index_param = table_schema.get_index_params();
+    if (vector_index_param.empty()) {
+      // skip
+    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "WITH (%.*s) ", vector_index_param.length(), vector_index_param.ptr()))) {
+      SHARE_SCHEMA_LOG(WARN, "print WITH vector index param failed", K(ret), K(vector_index_param));
+    }
+  }
   if (OB_SUCCESS == ret && !is_index_tbl && !is_no_table_options(sql_mode) && !table_schema.is_external_table()) {
     if (OB_FAIL(print_table_definition_store_format(table_schema, buf, buf_len, pos))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print store format", K(ret), K(table_schema));
@@ -1775,7 +1854,7 @@ int ObSchemaPrinter::print_table_definition_table_options(const ObTableSchema &t
       SHARE_SCHEMA_LOG(WARN, "fail to print block size", K(ret), K(table_schema));
     }
   }
-  if (OB_SUCCESS == ret && !strict_compat_ && is_index_tbl && !table_schema.is_fts_index()
+  if (OB_SUCCESS == ret && !strict_compat_ && is_index_tbl && !table_schema.is_fts_index() && !table_schema.is_vec_index()
       && !table_schema.is_multivalue_index() && !is_no_key_options(sql_mode)) {
     const char* local_flag = table_schema.is_global_index_table()
                              || table_schema.is_global_local_index_table()
@@ -2832,27 +2911,11 @@ int ObSchemaPrinter::print_view_definiton(
       SHARE_SCHEMA_LOG(WARN, "Unknow table", K(ret), K(table_id));
     } else if (OB_FAIL(table_schema->check_if_oracle_compat_mode(is_oracle_mode))) {
       LOG_WARN("fail to check oracle mode", KR(ret), KPC(table_schema));
-    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "CREATE %s%sVIEW ",
-            is_oracle_mode && table_schema->is_view_created_by_or_replace_force() ? "OR REPLACE FORCE " : "",
-            table_schema->is_materialized_view() ? "MATERIALIZED " : ""))) {
+    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "CREATE %sVIEW ",
+            is_oracle_mode && table_schema->is_view_created_by_or_replace_force() ? "OR REPLACE FORCE " : ""))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
     } else if (OB_FAIL(print_identifier(buf, buf_len, pos, table_schema->get_table_name(), is_oracle_mode))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
-    } else if (table_schema->is_materialized_view()) {
-      const ObTableSchema *container_table_schema = nullptr;
-
-      if (OB_FAIL(schema_guard_.get_table_schema(tenant_id, table_schema->get_data_table_id(), container_table_schema))) {
-        LOG_WARN("fail to get container_table_schema", KR(ret));
-      } else if (NULL == container_table_schema) {
-        ret = OB_TABLE_NOT_EXIST;
-        SHARE_SCHEMA_LOG(WARN, "Unknow container table", K(ret), K(table_schema->get_data_table_id()));
-      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " "))) {
-        SHARE_SCHEMA_LOG(WARN, "fail to print space", K(ret));
-      } else if (OB_FAIL(print_table_definition_table_options(*container_table_schema, buf, buf_len, pos, false, agent_mode, sql_mode))) {
-        SHARE_SCHEMA_LOG(WARN, "fail to print table options", K(ret), K(*container_table_schema));
-      } else if (OB_FAIL(print_table_definition_partition_options(*container_table_schema, buf, buf_len, pos, agent_mode, tz_info))) {
-        SHARE_SCHEMA_LOG(WARN, "fail to print partition options", K(ret), K(*container_table_schema));
-      }
     }
 
     if (OB_FAIL(ret)) {
@@ -2891,6 +2954,211 @@ int ObSchemaPrinter::print_view_definiton(
   } else {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("buf is bull", K(ret));
+  }
+  return ret;
+}
+int ObSchemaPrinter::print_materialized_view_definition(
+    const uint64_t tenant_id,
+    const uint64_t table_id,
+    char *buf,
+    const int64_t &buf_len,
+    int64_t &pos,
+    const ObTimeZoneInfo *tz_info,
+    bool agent_mode,
+    ObSQLMode sql_mode) const
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(buf)) {
+    ret = OB_ERR_UNEXPECTED;
+    SHARE_SCHEMA_LOG(WARN, "buf is null", KR(ret));
+  } else if (buf_len <= 0) {
+    ret = OB_ERR_UNEXPECTED;
+    SHARE_SCHEMA_LOG(WARN, "buf_len should bigger than 0", KR(ret));
+  } else {
+    const ObTableSchema *table_schema = nullptr;
+    const ObTableSchema *container_table_schema = nullptr;
+    uint64_t container_table_id = OB_INVALID_ID;
+    ObMViewInfo mview_info;
+    bool is_oracle_mode = false;
+    bool need_print_column_list = false;
+    common::ObSEArray<uint64_t, 16> column_ids;
+    if (OB_FAIL(schema_guard_.get_table_schema(tenant_id, table_id, table_schema))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to get table schema", KR(ret), K(tenant_id), K(table_id));
+    } else if (OB_ISNULL(table_schema)) {
+      ret = OB_TABLE_NOT_EXIST;
+      SHARE_SCHEMA_LOG(WARN, "Unknow table", KR(ret), K(table_id));
+    } else if (OB_INVALID_ID == (container_table_id = table_schema->get_data_table_id())) {
+      ret = OB_ERR_UNEXPECTED;
+      SHARE_SCHEMA_LOG(WARN, "fail to get container_table_id", KR(ret), K(tenant_id), K(table_id));
+    } else if (OB_FAIL(schema_guard_.get_table_schema(tenant_id, container_table_id, container_table_schema))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to get container_table_schema", KR(ret), K(tenant_id), K(table_id), K(container_table_id));
+    } else if (OB_ISNULL(container_table_schema)) {
+      ret = OB_TABLE_NOT_EXIST;
+      SHARE_SCHEMA_LOG(WARN, "Unknow container table", KR(ret), K(table_id), K(container_table_id));
+    } else if (OB_FAIL(table_schema->check_if_oracle_compat_mode(is_oracle_mode))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to check oracle mode", KR(ret), KPC(table_schema));
+    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "CREATE MATERIALIZED VIEW "))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print materialized view definition", KR(ret));
+    } else if (OB_FAIL(print_identifier(buf, buf_len, pos, table_schema->get_table_name(), is_oracle_mode))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print materialized view name", KR(ret));
+    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " "))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print space", KR(ret));
+    } else if (FALSE_IT(need_print_column_list = (is_oracle_mode && !is_inner_table(table_id)))) {
+
+    } else if (need_print_column_list && OB_FAIL(databuff_printf(buf, buf_len, pos, "("))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+    } else if (need_print_column_list && OB_FAIL(table_schema->get_column_ids(column_ids))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+    } else if (need_print_column_list
+              && OB_FAIL(print_column_list(*table_schema, column_ids, buf, buf_len, pos))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+    } else if (need_print_column_list && OB_FAIL(databuff_printf(buf, buf_len, pos, ") "))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+    } else if (!strict_compat_) {
+      const ObRowkeyInfo &rowkey_info = container_table_schema->get_rowkey_info();
+      bool is_first_col = true;
+      for (int64_t j = 0; OB_SUCC(ret) && j < rowkey_info.get_size(); ++j) {
+        const ObColumnSchemaV2 *col = nullptr;
+        if (OB_ISNULL(rowkey_info.get_column(j))) {
+          ret = OB_ERR_UNEXPECTED;
+          SHARE_SCHEMA_LOG(WARN, "fail to get column", KR(ret), K(tenant_id));
+        } else if (OB_ISNULL(col = schema_guard_.get_column_schema(tenant_id,
+                                                    container_table_id,
+                                                    rowkey_info.get_column(j)->column_id_))) {
+          ret = OB_ERR_UNEXPECTED;
+          SHARE_SCHEMA_LOG(WARN, "fail to get column schema", KR(ret), K(tenant_id),
+                       "column_id", rowkey_info.get_column(j)->column_id_);
+        } else if (OB_SUCC(ret)
+                   && col->get_column_id() != OB_HIDDEN_SESSION_ID_COLUMN_ID
+                   && !col->is_shadow_column()
+                   && !col->is_hidden()) {
+          if (OB_FAIL(databuff_printf(buf, buf_len, pos, "%s%.*s%s",
+                                      is_first_col ? "(PRIMARY KEY (" : "",
+                                      col->get_column_name_str().length(),
+                                      col->get_column_name_str().ptr(),
+                                      j < rowkey_info.get_size() - 1 ? ", " : ""))) {
+            SHARE_SCHEMA_LOG(WARN, "fail to print primary key", KR(ret), K(col->get_column_name()));
+          }
+          is_first_col = false;
+          if (OB_SUCC(ret) && rowkey_info.get_size() - 1 == j
+              && OB_FAIL(databuff_printf(buf, buf_len, pos, ")) "))) {
+            SHARE_SCHEMA_LOG(WARN, "fail to print materialized view rowkey", KR(ret));
+          }
+        }
+      }
+    }
+    if (OB_SUCC(ret)) {
+      if (OB_FAIL(print_table_definition_table_options(*container_table_schema,
+                                                       buf,
+                                                       buf_len,
+                                                       pos,
+                                                       false,
+                                                       agent_mode,
+                                                       sql_mode))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print table options", KR(ret), K(*container_table_schema));
+      } else if (!strict_compat_ && OB_FAIL(print_table_definition_partition_options(*container_table_schema,
+                                                                  buf,
+                                                                  buf_len,
+                                                                  pos,
+                                                                  agent_mode,
+                                                                  tz_info))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print partition options", KR(ret), K(*container_table_schema));
+      } else if (OB_FAIL(ObMViewInfo::fetch_mview_info(*GCTX.sql_proxy_, tenant_id, table_id, mview_info))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to fecth materialized view info", KR(ret), K(table_id));
+      } else if (!strict_compat_) {
+        switch (mview_info.get_refresh_method()) {
+          case ObMVRefreshMethod::NEVER:
+            if (OB_FAIL(databuff_printf(buf, buf_len, pos, " NEVER REFRESH "))) {
+              SHARE_SCHEMA_LOG(WARN, "fail to print refresh method never", KR(ret));
+            }
+            break;
+          case ObMVRefreshMethod::COMPLETE:
+            if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REFRESH COMPLETE "))) {
+              SHARE_SCHEMA_LOG(WARN, "fail to print refresh method complete", KR(ret));
+            }
+            break;
+          case ObMVRefreshMethod::FAST:
+            if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REFRESH FAST "))) {
+              SHARE_SCHEMA_LOG(WARN, "fail to print refresh method fast", KR(ret));
+            }
+            break;
+          case ObMVRefreshMethod::FORCE:
+            if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REFRESH FORCE "))) {
+              SHARE_SCHEMA_LOG(WARN, "fail to print refresh method force", KR(ret));
+            }
+            break;
+          default:
+            ret = OB_NOT_SUPPORTED;
+            SHARE_SCHEMA_LOG(WARN, "unsupported refresh method", KR(ret));
+            break;
+        }
+        if (OB_SUCC(ret)) {
+          switch (mview_info.get_refresh_mode()) {
+            case ObMVRefreshMode::NEVER:
+              // nothing to print
+              break;
+            case ObMVRefreshMode::DEMAND:
+            default:
+              if (OB_FAIL(databuff_printf(buf, buf_len, pos, "ON DEMAND "))) {
+                SHARE_SCHEMA_LOG(WARN, "fail to print refresh mode", KR(ret));
+              }
+              break;
+          }
+        }
+      }
+    }
+    if (!strict_compat_ && OB_SUCC(ret)) {
+      if (OB_NOT_NULL(mview_info.get_refresh_next().ptr())) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos,
+                                           "START WITH sysdate%s",
+                                           is_oracle_mode ? " + 0" : "()"))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print materialized view refresh start", KR(ret));
+        } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " NEXT %.*s ",
+                                            mview_info.get_refresh_next().length(),
+                                            mview_info.get_refresh_next().ptr()))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print mv refresh next", KR(ret));
+        }
+      }
+      if (OB_SUCC(ret)) {
+        if (table_schema->mv_enable_query_rewrite()
+                        && OB_FAIL(databuff_printf(buf, buf_len, pos,
+                                                  "ENABLE QUERY REWRITE "))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print materialized view enable qurey rewrite", KR(ret));
+        } else if (table_schema->mv_on_query_computation()
+                  && OB_FAIL(databuff_printf(buf, buf_len, pos,
+                                            "ENABLE ON QUERY COMPUTATION "))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print materialized view on query computation", KR(ret));
+        } else if (OB_FAIL(print_table_definition_column_group(*container_table_schema,
+                                                              buf,
+                                                              buf_len,
+                                                              pos))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print materialized view column group", KR(ret), K(*container_table_schema));
+        }
+      }
+    }
+    if (OB_SUCC(ret)) {
+      if (OB_FAIL(databuff_printf(buf, buf_len, pos, " AS "))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+      } else if (OB_FAIL(print_view_define_str(buf, buf_len, pos, is_oracle_mode,
+                                              table_schema->get_view_schema().get_view_definition_str()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print view definition", K(ret));
+      } else if (!table_schema->get_view_schema().get_view_is_updatable() && is_oracle_mode) {
+        // with read only is only supported in syntax in oracle mode, but some inner system view is
+        // nonupdatable, so we have to check compatible mode here.
+        // view in oracle mode can't be both with read only and with check option.
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " WITH READ ONLY"))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print view definition with read only", K(ret));
+        }
+      } else if (VIEW_CHECK_OPTION_CASCADED == table_schema->get_view_schema().get_view_check_option()) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " WITH CHECK OPTION"))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print view definition with check option", K(ret));
+        }
+      } else if (VIEW_CHECK_OPTION_LOCAL == table_schema->get_view_schema().get_view_check_option()) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " WITH LOCAL CHECK OPTION"))) {
+          SHARE_SCHEMA_LOG(WARN, "fail to print view definition with local check option", K(ret));
+        }
+      }
+    }
   }
   return ret;
 }
@@ -3762,6 +4030,8 @@ int ObSchemaPrinter::print_element_type(const uint64_t tenant_id,
 {
   int ret = OB_SUCCESS;
   if (elem_type_info->is_base_type()) {
+    // UDT base type should not be a collection, so just pass empty empty info
+    ObArray<ObString> extend_info;
     int64_t type_pos = 0;
     char type_str[OB_MAX_SYS_PARAM_NAME_LENGTH];
     bzero(type_str, OB_MAX_SYS_PARAM_NAME_LENGTH);
@@ -3772,7 +4042,8 @@ int ObSchemaPrinter::print_element_type(const uint64_t tenant_id,
                         elem_type_info->get_length(),
                         elem_type_info->get_precision(),
                         elem_type_info->get_scale(),
-                        static_cast<ObCollationType>(elem_type_info->get_coll_type())),
+                        static_cast<ObCollationType>(elem_type_info->get_coll_type()),
+                        extend_info),
                         elem_type_info, element_type_id);
     OZ (databuff_printf(buf, buf_len, pos, "%s", type_str));
   } else {
@@ -4063,7 +4334,8 @@ int ObSchemaPrinter::print_routine_param_type(const ObRoutineParam *param,
                           param->get_param_type().get_length(),
                           param->get_param_type().get_precision(),
                           param->get_param_type().get_scale(),
-                          param->get_param_type().get_collation_type()));
+                          param->get_param_type().get_collation_type(),
+                          param->get_extended_type_info()));
       OZ (databuff_printf(buf, buf_len, pos, " %s", type_str));
     } else {
       ObString type_str;
@@ -4264,8 +4536,7 @@ int ObSchemaPrinter::print_routine_definition(
     } else if (routine_info->get_routine_body().prefix_match_ci("procedure")
                || routine_info->get_routine_body().prefix_match_ci("function")) {
       use_v1 = false;
-
-      pl::ObPLParser parser(allocator, ObCharsets4Parser(), exec_env.get_sql_mode());
+      ObSQLMode sql_mode = exec_env.get_sql_mode();
 
       if (lib::is_mysql_mode()) {
         const char prefix[] = "CREATE\n";
@@ -4280,13 +4551,17 @@ int ObSchemaPrinter::print_routine_definition(
           MEMCPY(stmt_buf + prefix_len, routine_body.ptr(), routine_body.length());
 
           routine_stmt.assign_ptr(stmt_buf, buf_sz);
+          sql_mode &= ~SMO_ORACLE;
         }
       } else { // oracle mode
         routine_stmt = routine_body;
       }
       CK(!routine_stmt.empty());
 
-      OZ (parser.parse(routine_stmt, routine_stmt, parse_result, true));
+      if (OB_SUCC(ret)) {
+        pl::ObPLParser parser(allocator, ObCharsets4Parser(), sql_mode);
+        OZ (parser.parse(routine_stmt, routine_stmt, parse_result, true));
+      }
     }
 
     if (OB_SUCC(ret) && !use_v1) {
@@ -5094,7 +5369,8 @@ int ObSchemaPrinter::print_user_definition(uint64_t tenant_id,
                                           char *buf,
                                           const int64_t &buf_len,
                                           int64_t &pos,
-                                          bool is_role)
+                                          bool is_role,
+                                          bool print_password_secret /* default = false */)
 {
   int ret = OB_SUCCESS;
   common::ObArray<const ObUserInfo *> user_schemas;
@@ -5110,23 +5386,29 @@ int ObSchemaPrinter::print_user_definition(uint64_t tenant_id,
     SHARE_SCHEMA_LOG(WARN, "fail to print user name", K(user_name), K(ret));
   } else if (OB_FAIL(print_identifier(buf, buf_len, pos, user_name, is_oracle_mode))) {
     SHARE_SCHEMA_LOG(WARN, "fail to print user name", K(user_name), K(ret));
-  } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " "))) {
-    SHARE_SCHEMA_LOG(WARN, "fail to print user name", K(user_name), K(ret));
-  } else if (host_name.compare(OB_DEFAULT_HOST_NAME) != 0) {
+  } else if (!is_oracle_mode) {
     if (OB_FAIL(databuff_printf(buf, buf_len, pos, "@"))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print host name", K(host_name), K(ret));
     } else if (OB_FAIL(print_identifier(buf, buf_len, pos, host_name, is_oracle_mode))) {
-      SHARE_SCHEMA_LOG(WARN, "fail to print host name", K(host_name), K(ret));
-    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " "))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print host name", K(host_name), K(ret));
     }
   }
 
   if (OB_SUCC(ret) && user_passwd.length() > 0) {
-    if (OB_FAIL(databuff_printf(buf, buf_len, pos,
-        is_oracle_mode ? "IDENTIFIED BY VALUES \"%.*s\" " : "IDENTIFIED BY PASSWORD '%.*s' ",
-        user_passwd.length(), user_passwd.ptr()))) {
-      SHARE_SCHEMA_LOG(WARN, "fail to print user passwd", K(user_name), K(user_passwd), K(ret));
+    if (is_oracle_mode) {
+      if (OB_FAIL(databuff_printf(buf, buf_len, pos, " IDENTIFIED BY VALUES \"%.*s\"",
+                                  user_passwd.length(), user_passwd.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print user passwd", K(user_name), K(user_passwd), K(ret));
+      }
+    } else {
+      if (print_password_secret &&
+          OB_FAIL(databuff_printf(buf, buf_len, pos, " IDENTIFIED BY PASSWORD '<secret>'"))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print user passwd", K(user_name), K(user_passwd), K(ret));
+      } else if (!print_password_secret &&
+                 OB_FAIL(databuff_printf(buf, buf_len, pos, " IDENTIFIED BY PASSWORD '%.*s'",
+                         user_passwd.length(), user_passwd.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print user passwd", K(user_name), K(user_passwd), K(ret));
+      }
     }
   }
 
@@ -5141,13 +5423,11 @@ int ObSchemaPrinter::print_user_definition(uint64_t tenant_id,
         SHARE_SCHEMA_LOG(WARN, "get profile schena failed", K(ret));
       }
     } else {
-      if (OB_FAIL(databuff_printf(buf, buf_len, pos, "PROFILE "))) {
+      if (OB_FAIL(databuff_printf(buf, buf_len, pos, " PROFILE "))) {
         SHARE_SCHEMA_LOG(WARN, "fail to print profile", K(ret));
       } else if (OB_FAIL(print_identifier(buf, buf_len, pos,
                                           profile_schema->get_profile_name_str(),
                                           is_oracle_mode))) {
-        SHARE_SCHEMA_LOG(WARN, "fail to print profile", K(ret));
-      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, " "))) {
         SHARE_SCHEMA_LOG(WARN, "fail to print profile", K(ret));
       }
     }
@@ -5159,36 +5439,36 @@ int ObSchemaPrinter::print_user_definition(uint64_t tenant_id,
         break;
       }
       case ObSSLType::SSL_TYPE_NONE: {
-        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE NONE "))) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE NONE"))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         }
         break;
       }
       case ObSSLType::SSL_TYPE_ANY: {
-        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE SSL "))) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE SSL"))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         }
         break;
       }
       case ObSSLType::SSL_TYPE_X509: {
-        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE X509 "))) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE X509"))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         }
         break;
       }
       case ObSSLType::SSL_TYPE_SPECIFIED: {
-        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE "))) {
+        if (OB_FAIL(databuff_printf(buf, buf_len, pos, " REQUIRE"))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         } else if (!user_info.get_ssl_cipher_str().empty()
-                  && OB_FAIL(databuff_printf(buf, buf_len, pos, "CIPHER '%s' ",
+                  && OB_FAIL(databuff_printf(buf, buf_len, pos, " CIPHER '%s'",
                                             user_info.get_ssl_cipher()))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         } else if (!user_info.get_x509_issuer_str().empty()
-                  && OB_FAIL(databuff_printf(buf, buf_len, pos, "ISSUER '%s' ",
+                  && OB_FAIL(databuff_printf(buf, buf_len, pos, " ISSUER '%s'",
                                             user_info.get_x509_issuer()))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         } else if (!user_info.get_x509_subject_str().empty()
-                  && OB_FAIL(databuff_printf(buf, buf_len, pos, "SUBJECT '%s' ",
+                  && OB_FAIL(databuff_printf(buf, buf_len, pos, " SUBJECT '%s'",
                                             user_info.get_x509_subject()))) {
           SHARE_SCHEMA_LOG(WARN, "fail to print ssl info", K(user_name), K(ret));
         }
@@ -5197,6 +5477,24 @@ int ObSchemaPrinter::print_user_definition(uint64_t tenant_id,
       default: {
         ret = OB_ERR_UNEXPECTED;
         SHARE_SCHEMA_LOG(WARN, "unknown ssl type", K(user_info.get_ssl_type()), K(ret));
+      }
+    }
+  }
+
+  if (OB_SUCC(ret)) {
+    if (0 != user_info.get_max_connections() || 0 != user_info.get_max_user_connections()) {
+      if (OB_FAIL(databuff_printf(buf, buf_len, pos, " WITH"))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print with info", K(ret));
+      } else if (0 != user_info.get_max_connections() &&
+                 OB_FAIL(databuff_printf(buf, buf_len, pos, " MAX_CONNECTIONS_PER_HOUR %lu",
+                                         user_info.get_max_connections()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print get max_connections",
+                         K(user_info.get_max_connections()), K(ret));
+      } else if (0 != user_info.get_max_user_connections() &&
+                 OB_FAIL(databuff_printf(buf, buf_len, pos, " MAX_USER_CONNECTIONS %lu",
+                                         user_info.get_max_user_connections()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print get_max_user_connections",
+                         K(user_info.get_max_user_connections()), K(ret));
       }
     }
   }
@@ -5338,10 +5636,15 @@ int ObSchemaPrinter::print_external_table_file_info(const ObTableSchema &table_s
   // 1. print file location, pattern
   const ObString &location = table_schema.get_external_file_location();
   const ObString &pattern = table_schema.get_external_file_pattern();
+  const ObString &format_string = table_schema.get_external_file_format();
+  const ObString &properties_string = table_schema.get_external_properties();
   const bool user_specified = table_schema.is_user_specified_partition_for_external_table();
-  if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\nLOCATION='%.*s'", location.length(), location.ptr()))) {
+  bool is_odps_table = false;
+  if (OB_FAIL(ObSQLUtils::is_external_odps_table(properties_string, allocator, is_odps_table))) {
+    LOG_WARN("failed check is odps table or not", K(ret));
+  } else if (!is_odps_table && OB_FAIL(databuff_printf(buf, buf_len, pos, "\nLOCATION='%.*s'", location.length(), location.ptr()))) {
     SHARE_SCHEMA_LOG(WARN, "fail to print LOCATION", K(ret));
-  } else if (!pattern.empty() && OB_FAIL(databuff_printf(buf, buf_len, pos, "\nPATTERN='%.*s'", pattern.length(), pattern.ptr()))) {
+  } else if (!is_odps_table && !pattern.empty() && OB_FAIL(databuff_printf(buf, buf_len, pos, "\nPATTERN='%.*s'", pattern.length(), pattern.ptr()))) {
     SHARE_SCHEMA_LOG(WARN, "fail to print PATTERN", K(ret));
   } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\nAUTO_REFRESH = %s", table_schema.get_external_table_auto_refresh() == 0 ? "OFF" :
                                                                                 table_schema.get_external_table_auto_refresh() == 1 ? "IMMEDIATE" : "INTERVAL"))) {
@@ -5355,13 +5658,19 @@ int ObSchemaPrinter::print_external_table_file_info(const ObTableSchema &table_s
   // 2. print file format
   if (OB_SUCC(ret)) {
     ObExternalFileFormat format;
-    if (OB_FAIL(format.load_from_string(table_schema.get_external_file_format(), allocator))) {
+    const ObString &format_or_properties = is_odps_table ?  properties_string : format_string;
+    if (format_or_properties.empty()) {
+      ret = OB_ERR_UNEXPECTED;
+      SHARE_SCHEMA_LOG(WARN, "format_or_properties is empty", K(ret));
+    } else if (OB_FAIL(format.load_from_string(format_or_properties, allocator))) {
       SHARE_SCHEMA_LOG(WARN, "fail to load from json string", K(ret));
     } else if (!(format.format_type_ > ObExternalFileFormat::INVALID_FORMAT
                  && format.format_type_ < ObExternalFileFormat::MAX_FORMAT)) {
       ret = OB_NOT_SUPPORTED;
       SHARE_SCHEMA_LOG(WARN, "unsupported to print file format", K(ret), K(format.format_type_));
-    } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\nFORMAT (\n"))) {
+    } else if (!is_odps_table && OB_FAIL(databuff_printf(buf, buf_len, pos, "\nFORMAT (\n"))) {
+      SHARE_SCHEMA_LOG(WARN, "fail to print FORMAT (", K(ret));
+    } else if (is_odps_table && OB_FAIL(databuff_printf(buf, buf_len, pos, "\nPROPERTIES (\n"))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print FORMAT (", K(ret));
     } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "  TYPE = '%s',", ObExternalFileFormat::FORMAT_TYPE_STR[format.format_type_]))) {
       SHARE_SCHEMA_LOG(WARN, "fail to print TYPE", K(ret));
@@ -5398,6 +5707,30 @@ int ObSchemaPrinter::print_external_table_file_info(const ObTableSchema &table_s
       } else if (OB_FAIL(0 != csv.null_if_.count() &&
                         databuff_printf(buf, buf_len, pos, "\n  NULL_IF = (%.*s),", origin_format.origin_null_if_str_.length(), origin_format.origin_null_if_str_.ptr()))) {
         SHARE_SCHEMA_LOG(WARN, "fail to print NULL_IF", K(ret));
+      }
+    } else if (OB_SUCC(ret) && ObExternalFileFormat::ODPS_FORMAT == format.format_type_) {
+      const ObODPSGeneralFormat &odps = format.odps_format_;
+      ObString scret_str("********");
+      if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[0], odps.access_type_.length(), odps.access_type_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (!odps.access_id_.empty() && OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[1], scret_str.length(), scret_str.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (!odps.access_key_.empty() && OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[2], scret_str.length(), scret_str.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (!odps.sts_token_.empty() && OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[3], scret_str.length(), scret_str.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[4], odps.endpoint_.length(), odps.endpoint_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[5], odps.project_.length(), odps.project_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[6], odps.schema_.length(), odps.schema_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[7], odps.table_.length(), odps.table_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[8], odps.quota_.length(), odps.quota_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
+      } else if (OB_FAIL(databuff_printf(buf, buf_len, pos, "\n  %s = '%.*s',", ObODPSGeneralFormat::OPTION_NAMES[9], odps.compression_code_.length(), odps.compression_code_.ptr()))) {
+        SHARE_SCHEMA_LOG(WARN, "fail to print ODPS_INFO", K(ret));
       }
     }
     if (OB_SUCC(ret)) {

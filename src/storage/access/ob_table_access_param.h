@@ -15,6 +15,7 @@
 
 #include "storage/ob_i_store.h"
 #include "storage/blocksstable/ob_datum_range.h"
+#include "ob_sstable_index_filter.h"
 #include "common/ob_tablet_id.h"
 #include "share/ob_i_tablet_scan.h"
 #include "share/schema/ob_table_param.h"
@@ -51,6 +52,7 @@ public:
   bool enable_fuse_row_cache(const ObQueryFlag &query_flag) const;
   //temp solution
   int get_cg_column_param(const share::schema::ObColumnParam *&column_param) const;
+  int build_index_filter_for_row_store(common::ObIAllocator *allocator);
   const ObITableReadInfo *get_read_info(const bool is_get = false) const
   {
 	  return is_get ? rowkey_read_info_ : read_info_;
@@ -111,11 +113,12 @@ public:
   }
   bool can_be_reused(const uint32_t cg_idx, const common::ObIArray<sql::ObExpr*> &exprs, const bool is_aggregate)
   {
+    const sql::ObExprPtrIArray *inner_exprs = is_aggregate ? aggregate_exprs_ : output_exprs_;
     bool can_reuse = cg_idx == cg_idx_ && enable_pd_aggregate() == is_aggregate
-                      && nullptr != output_exprs_ && output_exprs_->count() == exprs.count() ;
+                      && nullptr != inner_exprs && inner_exprs->count() == exprs.count() ;
     if (can_reuse) {
       for (int64_t i = 0; i < exprs.count(); ++i) {
-        if (output_exprs_->at(i) != exprs.at(i)) {
+        if (inner_exprs->at(i) != exprs.at(i)) {
           can_reuse = false;
           break;
         }
@@ -168,17 +171,8 @@ public:
   { pd_storage_flag_.set_use_global_iter_pool(false); }
   OB_INLINE void set_tablet_handle(const ObTabletHandle *tablet_handle)
   { tablet_handle_ = tablet_handle; }
-  OB_INLINE bool use_uniform_format() const
-  {
-    return op_->enable_rich_format_ &&
-        (pd_storage_flag_.is_group_by_pushdown() || pd_storage_flag_.is_aggregate_pushdown());
-  }
   OB_INLINE bool use_new_format() const
-  {
-    return op_->enable_rich_format_ &&
-        !pd_storage_flag_.is_group_by_pushdown() &&
-        !pd_storage_flag_.is_aggregate_pushdown();
-  }
+  { return op_->enable_rich_format_; }
   OB_INLINE int64_t get_io_read_batch_size() const
   { return table_scan_opt_.io_read_batch_size_; }
   OB_INLINE int64_t get_io_read_gap_size() const
@@ -228,6 +222,7 @@ public:
   const sql::ObExpr *auto_split_filter_;
   sql::ExprFixedArray *auto_split_params_;
   bool is_tablet_spliting_;
+  bool is_column_replica_table_;
 };
 
 struct ObTableAccessParam

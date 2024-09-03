@@ -630,24 +630,32 @@ public:
                           common::ObMySQLTransaction &trans,
                           const share::ObRawObjPrivArray &obj_priv_array,
                           const uint64_t option,
-                          const share::schema::ObObjPrivSortKey &obj_priv_key);
+                          const share::schema::ObObjPrivSortKey &obj_priv_key,
+                          const common::ObString &grantor = "",
+                          const common::ObString &grantor_host = "");
   virtual int revoke_table(const share::schema::ObTablePrivSortKey &table_priv_key,
                            const ObPrivSet priv_set,
                            common::ObMySQLTransaction &trans,
                            const share::schema::ObObjPrivSortKey &obj_priv_key,
                            const share::ObRawObjPrivArray &obj_priv_array,
-                           const bool revoke_all_ora);
+                           const bool revoke_all_ora,
+                           const common::ObString &grantor = "",
+                           const common::ObString &grantor_host = "");
 
   virtual int grant_routine(const ObRoutinePrivSortKey &routine_priv_key,
                             const ObPrivSet priv_set,
                             common::ObMySQLTransaction &trans,
                             const uint64_t option,
-                            const bool gen_ddl_stmt = true);
+                            const bool gen_ddl_stmt = true,
+                            const common::ObString &grantor = "",
+                            const common::ObString &grantor_host = "");
   virtual int revoke_routine(const ObRoutinePrivSortKey &routine_priv_key,
                             const ObPrivSet priv_set,
                             common::ObMySQLTransaction &trans,
                             const bool report_error = true,
-                            const bool gen_ddl_stmt = true);
+                            const bool gen_ddl_stmt = true,
+                            const common::ObString &grantor = "",
+                            const common::ObString &grantor_host = "");
   virtual int grant_column(ObSchemaGetterGuard &schema_guard,
                            const ObColumnPrivSortKey &column_priv_key,
                            const ObPrivSet priv_set,
@@ -1168,10 +1176,11 @@ private:
                            int64_t routine_id);
 
 private:
-  int alter_table_rename_built_in_fts_index_(
+  int alter_table_rename_built_in_index_(
       const uint64_t tenant_id,
       const uint64_t data_table_id,
       const uint64_t database_id,
+      const ObIndexType index_type,
       const ObString &index_name,
       const ObString &new_index_name,
       const ObIndexStatus *new_index_status,

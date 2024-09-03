@@ -270,6 +270,9 @@ int TableItem::deep_copy(ObIRawExprCopier &expr_copier,
   ddl_schema_version_ = other.ddl_schema_version_;
   ddl_table_id_ = other.ddl_table_id_;
   ref_query_ = other.ref_query_;
+  //external table
+  external_table_partition_ = other.external_table_partition_;
+  SampleInfo *buf = NULL;
   if (is_json_table()
       && OB_FAIL(deep_copy_json_table_def(*other.json_table_def_, expr_copier, allocator))) {
     LOG_WARN("failed to deep copy json table define", K(ret));
@@ -284,7 +287,26 @@ int TableItem::deep_copy(ObIRawExprCopier &expr_copier,
   } else if (is_values_table() &&
              OB_FAIL(deep_copy_values_table_def(*other.values_table_def_, expr_copier, allocator))) {
     LOG_WARN("failed to deep copy values table def", K(ret));
-  } else {
+  } else { /* do nothing */ }
+  if (OB_SUCC(ret)) {
+    if (OB_ISNULL(other.sample_info_)) {
+      // do nothing
+    } else {
+      if (OB_ISNULL(sample_info_)) {
+        buf = static_cast<SampleInfo*>(allocator->alloc(sizeof(SampleInfo)));
+        if (OB_ISNULL(buf)) {
+          ret = OB_ALLOCATE_MEMORY_FAILED;
+          LOG_WARN("failed to allocate memory for sample info", K(ret));
+        } else {
+          sample_info_ = new(buf) SampleInfo();
+        }
+      }
+      if (OB_SUCC(ret)) {
+        *sample_info_ = *other.sample_info_;
+      }
+    }
+  }
+  if (OB_SUCC(ret)) {
     exec_params_.reuse();
     for (int64_t i = 0; OB_SUCC(ret) && i < other.exec_params_.count(); ++i) {
       ObRawExpr *exec_param = other.exec_params_.at(i);
@@ -292,7 +314,7 @@ int TableItem::deep_copy(ObIRawExprCopier &expr_copier,
       if (OB_FAIL(expr_copier.do_copy_expr(exec_param, new_expr))) {
         LOG_WARN("failed to copy exec param", K(ret));
       } else if (OB_ISNULL(new_expr) ||
-                 OB_UNLIKELY(!new_expr->is_exec_param_expr())) {
+                OB_UNLIKELY(!new_expr->is_exec_param_expr())) {
         ret = OB_ERR_UNEXPECTED;
         LOG_WARN("exec param is invalid", K(ret), K(new_expr));
       } else if (OB_FAIL(expr_copier.copy(static_cast<ObExecParamRawExpr *>(new_expr)->get_ref_expr()))) {
@@ -407,6 +429,7 @@ ObDMLStmt::ObDMLStmt(stmt::StmtType type)
       check_constraint_items_(),
       dblink_id_(OB_INVALID_ID),
       is_reverse_link_(false),
+      has_vec_approx_(false),
       match_exprs_()
 {
 }
@@ -519,6 +542,7 @@ int ObDMLStmt::assign(const ObDMLStmt &other)
     transpose_item_ = other.transpose_item_;
     dblink_id_ = other.dblink_id_;
     is_reverse_link_ = other.is_reverse_link_;
+    has_vec_approx_ = other.has_vec_approx_;
   }
   return ret;
 }
@@ -684,6 +708,7 @@ int ObDMLStmt::deep_copy_stmt_struct(ObIAllocator &allocator,
     is_fetch_with_ties_ = other.is_fetch_with_ties_;
     dblink_id_ = other.dblink_id_;
     is_reverse_link_ = other.is_reverse_link_;
+    has_vec_approx_ = other.has_vec_approx_;
   }
   if (OB_SUCC(ret)) {
     TransposeItem *tmp = NULL;
@@ -1813,10 +1838,15 @@ int ObDMLStmt::formalize_relation_exprs(ObSQLSessionInfo *session_info)
         ret = OB_ERR_UNEXPECTED;
         LOG_WARN("expr is NULL", K(ret));
       } else if (column_expr->is_virtual_generated_column() &&
-                 (!column_expr->is_fulltext_column() && !column_expr->is_multivalue_generated_column())) {
+                 (!column_expr->is_fulltext_column() &&
+                  !column_expr->is_multivalue_generated_column() &&
+                  !column_expr->is_vec_index_column())) {
         ObRawExpr *dependant_expr = static_cast<ObColumnRefRawExpr *>(
                                     column_expr)->get_dependant_expr();
-        if (OB_FAIL(dependant_expr->formalize(session_info))) {
+        if (dependant_expr == nullptr) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("get unexpected null", K(ret));
+        } else if (OB_FAIL(dependant_expr->formalize(session_info))) {
           LOG_WARN("failed to formalize expr", K(ret));
         } else if (OB_FAIL(dependant_expr->pull_relation_id())) {
           LOG_WARN("pull expr relation ids failed", K(ret), K(*dependant_expr));
@@ -2497,6 +2527,19 @@ TableItem *ObDMLStmt::create_table_item(ObIAllocator &allocator)
   return table_item;
 }
 
+JoinedTable *ObDMLStmt::create_joined_table(ObIAllocator &allocator)
+{
+  JoinedTable *table_item = NULL;
+  void *ptr = NULL;
+  if (NULL == (ptr = allocator.alloc(sizeof(JoinedTable)))) {
+    LOG_WARN_RET(OB_ALLOCATE_MEMORY_FAILED, "alloc joined table failed");
+  } else {
+    table_item = new(ptr) JoinedTable();
+    table_item->type_ = TableItem::JOINED_TABLE;
+  }
+  return table_item;
+}
+
 int ObDMLStmt::add_table_item(const ObSQLSessionInfo *session_info, TableItem *table_item)
 {
   int ret = OB_SUCCESS;
@@ -3000,6 +3043,26 @@ int ObDMLStmt::init_stmt(TableHashAllocator &table_hash_alloc, ObWrapperAllocato
 }
 
 int ObDMLStmt::relids_to_table_ids(const ObSqlBitSet<> &table_set,
+                                   ObIArray<uint64_t> &table_ids) const
+{
+  int ret = OB_SUCCESS;
+  TableItem *table = NULL;
+  int64_t idx = OB_INVALID_INDEX;
+  for (int64_t i = 0; OB_SUCC(ret) && i < table_items_.count(); ++i) {
+    if (OB_ISNULL(table = table_items_.at(i))) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("table item is null", K(ret));
+    } else if (OB_UNLIKELY((idx = get_table_bit_index(table->table_id_)) == OB_INVALID_INDEX)) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("get table item invalid idx", K(idx), K(table->table_id_));
+    } else if (table_set.has_member(idx)) {
+      ret = table_ids.push_back(table->table_id_);
+    }
+  }
+  return ret;
+}
+
+int ObDMLStmt::relids_to_table_ids(const ObRelIds &table_set,
                                    ObIArray<uint64_t> &table_ids) const
 {
   int ret = OB_SUCCESS;
@@ -4584,6 +4647,20 @@ int ObDMLStmt::has_virtual_generated_column(int64_t table_id,
     }
   }
   return ret;
+}
+
+ObRawExpr* ObDMLStmt::get_first_vector_expr() const
+{
+  ObRawExpr* ret_expr = nullptr;
+  int order_size = get_order_item_size();
+  bool found = false;
+  for (int i = 0; i < order_size && OB_ISNULL(ret_expr); ++i) {
+    ObRawExpr *tmp_expr = get_order_item(i).expr_;
+    if (OB_NOT_NULL(tmp_expr) && tmp_expr->is_vector_sort_expr()) {
+      ret_expr = tmp_expr;
+    }
+  }
+  return ret_expr;
 }
 
 int ObDMLStmt::check_hint_table_matched_table_item(ObCollationType cs_type,

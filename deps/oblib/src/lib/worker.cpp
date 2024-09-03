@@ -18,7 +18,6 @@
 #include "lib/time/ob_time_utility.h"
 #include "lib/allocator/ob_malloc.h"
 #include "common/ob_clock_generator.h"
-
 using namespace oceanbase::common;
 using namespace oceanbase::lib;
 
@@ -44,19 +43,37 @@ int __attribute__((weak)) common_yield()
   return OB_SUCCESS;
 }
 
-}
+int __attribute__((weak)) SET_GROUP_ID(uint64_t group_id, bool is_background)
+{
+  int ret = OB_SUCCESS;
+  UNUSED(is_background);
+  THIS_WORKER.set_group_id_(group_id);
+  return ret;
 }
 
+int __attribute__((weak)) CONVERT_FUNCTION_TYPE_TO_GROUP_ID(const uint8_t function_type, uint64_t &group_id)
+{
+  int ret = OB_SUCCESS;
+  UNUSED(function_type);
+  group_id = GET_GROUP_ID();
+  return ret;
+}
+
+}  // namespace lib
+}  // namespace oceanbase
 __thread Worker *Worker::self_;
 
 Worker::Worker()
-    : allocator_(nullptr),
+    : group_(nullptr),
+      allocator_(nullptr),
       st_current_priority_(0),
       session_(nullptr),
       cur_request_(nullptr),
       worker_level_(INT32_MAX),
       curr_request_level_(0),
+      is_th_worker_(false),
       group_id_(0),
+      func_type_(0),
       rpc_stat_srv_(nullptr),
       timeout_ts_(INT64_MAX),
       ntp_offset_(0),
@@ -83,30 +100,6 @@ Worker::Status Worker::check_wait()
     ret_status = WS_INVALID;
   }
   return ret_status;
-}
-
-const uint64_t OBCG_DEFAULT_GROUP_ID = 0;
-const uint64_t USER_RESOURCE_GROUP_START_ID = 10000;
-const uint64_t OB_INVALID_GROUP_ID = UINT64_MAX;
-OB_INLINE bool is_user_group(const uint64_t group_id)
-{
-  return group_id >= USER_RESOURCE_GROUP_START_ID && group_id != OB_INVALID_GROUP_ID;
-}
-
-OB_INLINE bool is_valid_resource_group(const uint64_t group_id)
-{
-  // other group or user group
-  return group_id == OBCG_DEFAULT_GROUP_ID || is_user_group(group_id);
-}
-
-void Worker::set_group_id(int32_t group_id)
-{
-  const int64_t USER_RESOURCE_GROUP_START_ID = 10000;
-  if (OBCG_DEFAULT_GROUP_ID == group_id_ || (is_user_group(group_id_) && is_valid_resource_group(group_id))) {
-    group_id_ = group_id;
-  } else {
-    LOG_ERROR_RET(OB_INNER_STAT_ERROR, "group_id is unexpected", K(group_id_), K(group_id));
-  }
 }
 
 bool Worker::sched_wait()

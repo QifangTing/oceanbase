@@ -940,7 +940,8 @@ int ObFtsIndexBuilderUtil::generate_doc_id_column(
           LOG_WARN("set column name failed", K(ret));
         } else if (OB_FAIL(column_schema.set_orig_default_value(default_value))) {
           LOG_WARN("set orig default value failed", K(ret));
-        } else if (OB_FAIL(column_schema.set_cur_default_value(default_value))) {
+        } else if (OB_FAIL(column_schema.set_cur_default_value(default_value,
+                column_schema.is_default_expr_v2_column()))) {
           LOG_WARN("set current default value failed", K(ret));
         } else if (OB_FAIL(data_schema.add_column(column_schema))) {
           LOG_WARN("add column schema to data table failed", K(ret));
@@ -1062,7 +1063,8 @@ int ObFtsIndexBuilderUtil::generate_word_segment_column(
             LOG_WARN("set column name failed", K(ret));
           } else if (OB_FAIL(column_schema.set_orig_default_value(default_value))) {
             LOG_WARN("set orig default value failed", K(ret));
-          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value))) {
+          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value,
+                    column_schema.is_default_expr_v2_column()))) {
             LOG_WARN("set current default value failed", K(ret));
           } else if (OB_FAIL(data_schema.add_column(column_schema))) {
             LOG_WARN("add column schema to data table failed", K(ret));
@@ -1176,7 +1178,8 @@ int ObFtsIndexBuilderUtil::generate_word_count_column(
             LOG_WARN("set column name failed", K(ret));
           } else if (OB_FAIL(column_schema.set_orig_default_value(default_value))) {
             LOG_WARN("set orig default value failed", K(ret));
-          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value))) {
+          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value,
+                    column_schema.is_default_expr_v2_column()))) {
             LOG_WARN("set current default value failed", K(ret));
           } else if (OB_FAIL(data_schema.add_column(column_schema))) {
             LOG_WARN("add word_count column schema to data table failed", K(ret));
@@ -1286,7 +1289,8 @@ int ObFtsIndexBuilderUtil::generate_doc_length_column(
             LOG_WARN("set column name failed", K(ret));
           } else if (OB_FAIL(column_schema.set_orig_default_value(default_value))) {
             LOG_WARN("set orig default value failed", K(ret));
-          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value))) {
+          } else if (OB_FAIL(column_schema.set_cur_default_value(default_value,
+                    column_schema.is_default_expr_v2_column()))) {
             LOG_WARN("set current default value failed", K(ret));
           } else if (OB_FAIL(data_schema.add_column(column_schema))) {
             LOG_WARN("add word_count column schema to data table failed", K(ret));
@@ -1561,7 +1565,7 @@ int ObFtsIndexBuilderUtil::check_fts_or_multivalue_index_allowed(
     LOG_WARN("invalid argument", K(ret), K(data_schema));
   } else if (data_schema.is_partitioned_table() && data_schema.is_heap_table()) {
     ret = OB_NOT_SUPPORTED;
-    LOG_USER_ERROR(OB_NOT_SUPPORTED, "create full-text or multi-value index on partition table without primary key");
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "create full-text or multi-value or vector index on partition table without primary key");
   }
   return ret;
 }
@@ -2277,7 +2281,8 @@ int ObMulValueIndexBuilderUtil::generate_multivalue_column(
           LOG_WARN("set column name failed", K(ret));
         } else if (OB_FAIL(multival_col.set_orig_default_value(default_value))) {
           LOG_WARN("set orig default value failed", K(ret));
-        } else if (OB_FAIL(multival_col.set_cur_default_value(default_value))) {
+        } else if (OB_FAIL(multival_col.set_cur_default_value(default_value,
+                  multival_col.is_default_expr_v2_column()))) {
           LOG_WARN("set current default value failed", K(ret));
         } else if (OB_FAIL(data_schema.add_column(multival_col))) {
           LOG_WARN("add column schema to data table failed", K(ret));
@@ -2315,7 +2320,8 @@ int ObMulValueIndexBuilderUtil::generate_multivalue_column(
             LOG_WARN("set column name failed", K(ret));
           } else if (OB_FAIL(multival_arr_col.set_orig_default_value(default_value))) {
             LOG_WARN("set orig default value failed", K(ret));
-          } else if (OB_FAIL(multival_arr_col.set_cur_default_value(default_value))) {
+          } else if (OB_FAIL(multival_arr_col.set_cur_default_value(default_value,
+                    multival_arr_col.is_default_expr_v2_column()))) {
             LOG_WARN("set current default value failed", K(ret));
           } else if (OB_FAIL(data_schema.add_column(multival_arr_col))) {
             LOG_WARN("add column schema to data table failed", K(ret));

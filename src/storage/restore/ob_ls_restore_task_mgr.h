@@ -208,6 +208,7 @@ private:
 
   void unset_force_reload_();
   void set_noneed_redo_failed_tablets_();
+  int check_is_ls_restore_task_finished_(bool &is_restored);
 
 private:
   bool is_inited_;
@@ -230,6 +231,10 @@ private:
   // 'final_reload_' is marked as True when no tablets to restore are found after reload. Then,
   // reload is forbidden while no tablets in wait or doing set.
   bool final_reload_;
+  // Follower can reload tablets only if leader has been restored. This is
+  // true for restore status RESTORE_MAJOR_DATA for shared storage.
+  bool has_checked_leader_done_;
+  bool is_follower_restore_from_leader_;
   DISALLOW_COPY_AND_ASSIGN(ObLSRestoreTaskMgr);
 };
 

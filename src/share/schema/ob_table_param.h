@@ -292,7 +292,8 @@ public:
               const common::ObIArray<uint64_t> &output_column_ids,
               const sql::ObStoragePushdownFlag &pd_pushdown_flag,
               const common::ObIArray<uint64_t> *tsc_out_cols = NULL,
-              const bool force_mysql_mode = false);
+              const bool force_mysql_mode = false,
+              const bool query_cs_replica = false);
 
   // convert aggregate column projector from 'aggregate_column_ids' and 'output_projector_'
   // convert group by column projector from 'group_by_column_ids' and 'output_projector_'
@@ -311,6 +312,8 @@ public:
   inline void set_is_fts_index(const bool is_fts_index) { is_fts_index_ = is_fts_index; }
   inline int64_t is_multivalue_index() const { return is_multivalue_index_; }
   inline void set_is_multivalue_index(bool is_multivalue_index) { is_multivalue_index_ = is_multivalue_index; }
+  inline bool is_vec_index() const { return is_vec_index_; }
+  inline void set_is_vec_index(const bool is_vec_index) { is_vec_index_ = is_vec_index; }
   inline bool use_lob_locator() const { return use_lob_locator_; }
   inline bool enable_lob_locator_v2() const { return enable_lob_locator_v2_; }
   inline bool &get_enable_lob_locator_v2() { return enable_lob_locator_v2_; }
@@ -344,7 +347,8 @@ private:
                                       const common::ObIArray<uint64_t> &output_column_ids,
                                       const common::ObIArray<uint64_t> *tsc_out_cols,
                                       const bool force_mysql_mode,
-                                      const sql::ObStoragePushdownFlag &pd_pushdown_flag);
+                                      const sql::ObStoragePushdownFlag &pd_pushdown_flag,
+                                      const bool query_cs_replica = false);
 
   int filter_common_columns(const common::ObIArray<const ObColumnSchemaV2 *> &columns,
                             common::ObIArray<const ObColumnSchemaV2 *> &new_columns);
@@ -406,6 +410,7 @@ private:
   bool is_fts_index_;
   bool is_multivalue_index_;
   bool is_column_replica_table_;
+  bool is_vec_index_;
 };
 } //namespace schema
 } //namespace share

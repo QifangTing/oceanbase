@@ -31,6 +31,7 @@ namespace storage
 
 ObBlockRowStore::ObBlockRowStore(ObTableAccessContext &context)
     : is_inited_(false),
+      is_vec2_(false),
       pd_filter_info_(),
       context_(context),
       iter_param_(nullptr),
@@ -63,8 +64,9 @@ void ObBlockRowStore::reuse()
   is_aggregated_in_prefetch_ = false;
 }
 
-int ObBlockRowStore::init(const ObTableAccessParam &param)
+int ObBlockRowStore::init(const ObTableAccessParam &param, common::hash::ObHashSet<int32_t> *agg_col_mask)
 {
+  UNUSED(agg_col_mask);
   int ret = OB_SUCCESS;
   if (IS_INIT) {
     ret = OB_INIT_TWICE;
@@ -145,10 +147,11 @@ int ObBlockRowStore::get_filter_result(ObFilterResult &res)
   return ret;
 }
 
-int ObBlockRowStore::open(const ObTableIterParam &iter_param)
+int ObBlockRowStore::open(ObTableIterParam &iter_param)
 {
   int ret = OB_SUCCESS;
   const bool need_padding = is_pad_char_to_full_length(context_.sql_mode_);
+  bool need_convert = false;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
     LOG_WARN("Not init", K(ret));
@@ -159,19 +162,27 @@ int ObBlockRowStore::open(const ObTableIterParam &iter_param)
     LOG_WARN("Invalid argument to init store pushdown filter", K(ret), K(iter_param));
   } else if (nullptr == pd_filter_info_.filter_) {
     // nothing to do
+  } else if (OB_FAIL(pd_filter_info_.filter_->init_evaluated_datums(&pd_filter_info_.filter_->get_allocator(), need_convert))) {
+    LOG_WARN("Failed to init pushdown filter evaluated datums", K(ret));
   } else {
-    if (iter_param.is_use_column_store()) {
+    if (OB_UNLIKELY(need_convert)) {
+      sql::ObPushdownFilterFactory filter_factory(&pd_filter_info_.filter_->get_allocator());
+      if (OB_FAIL(filter_factory.convert_white_filter_to_black(pd_filter_info_.filter_))) {
+        LOG_WARN("Failed to convert white filter to black filter", K(ret), KPC_(pd_filter_info_.filter));
+      } else {
+        iter_param.pushdown_filter_ = pd_filter_info_.filter_;
+      }
+    }
+    if (OB_FAIL(ret)) {
+    } else if (iter_param.is_use_column_store()) {
       if (OB_FAIL(pd_filter_info_.filter_->init_co_filter_param(iter_param, need_padding))) {
         LOG_WARN("Failed to init pushdown filter executor", K(ret));
       }
+    } else if (OB_FAIL(iter_param.build_index_filter_for_row_store(context_.allocator_))) {
+      LOG_WARN("Failed to build skip index for row store", K(ret));
     } else if (OB_FAIL(pd_filter_info_.filter_->init_filter_param(
             *iter_param.get_col_params(), *iter_param.out_cols_project_, need_padding))) {
       LOG_WARN("Failed to init pushdown filter executor", K(ret));
-    }
-
-    if (OB_FAIL(ret)) {
-    } else if (OB_FAIL(pd_filter_info_.filter_->init_evaluated_datums())) {
-      LOG_WARN("Failed to init pushdown filter evaluated datums", K(ret));
     }
   }
   return ret;

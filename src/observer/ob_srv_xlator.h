@@ -60,7 +60,6 @@ using obrpc::ObRpcTranslator;
 using obrpc::ObRpcSessionHandler;
 using obmysql::ObMySQLTranslator;
 using common::ObIAllocator;
-struct ObGlobalContext;
 
 
 ObIAllocator &get_sql_arena_allocator();
@@ -157,6 +156,7 @@ protected:
   int get_mp_connect_processor(ObReqProcessor *&ret_proc);
 
 private:
+  int check_service_name_(rpc::ObRequest &req);
   const ObGlobalContext &gctx_;
   DISALLOW_COPY_AND_ASSIGN(ObSrvMySQLXlator);
 }; // end of class ObSrvMySQLXlator

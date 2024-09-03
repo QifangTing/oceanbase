@@ -44,9 +44,10 @@ using namespace oceanbase::common;
 LST_DO2(INIT_BIND_FUNC, (), MTL_MEMBERS);
 
 #define CONSTRUCT_MEMBER(T, IDX) m##IDX##_()
-ObTenantBase::ObTenantBase(const uint64_t id, bool enable_tenant_ctx_check)
+ObTenantBase::ObTenantBase(const uint64_t id, const int64_t epoch, bool enable_tenant_ctx_check)
     : LST_DO2(CONSTRUCT_MEMBER, (,), MTL_MEMBERS),
     id_(id),
+    epoch_(epoch),
     inited_(false),
     created_(false),
     mtl_init_ctx_(nullptr),
@@ -54,6 +55,7 @@ ObTenantBase::ObTenantBase(const uint64_t id, bool enable_tenant_ctx_check)
     unit_max_cpu_(0),
     unit_min_cpu_(0),
     unit_memory_size_(0),
+    unit_data_disk_size_(0),
     cgroups_(nullptr),
     enable_tenant_ctx_check_(enable_tenant_ctx_check),
     thread_count_(0),
@@ -68,6 +70,8 @@ ObTenantBase &ObTenantBase::operator=(const ObTenantBase &ctx)
     return *this;
   }
   id_ = ctx.id_;
+  epoch_ = ctx.epoch_;
+  unit_data_disk_size_ = ctx.unit_data_disk_size_;
   mtl_init_ctx_ = ctx.mtl_init_ctx_;
   tenant_role_value_ = ctx.tenant_role_value_;
 #define CONSTRUCT_MEMBER_TMP2(IDX) \
@@ -298,9 +302,10 @@ int ObTenantBase::pre_run()
 {
   int ret = OB_SUCCESS;
   ObTenantEnv::set_tenant(this);
+  // register in tenant cgroup without modifying group_id
   ObCgroupCtrl *cgroup_ctrl = get_cgroup();
-  if (cgroup_ctrl != nullptr && cgroup_ctrl->is_valid()) {
-    ret = cgroup_ctrl->add_self_to_cgroup(id_);
+  if (OB_NOT_NULL(cgroup_ctrl)) {
+    ret = cgroup_ctrl->add_self_to_cgroup_(id_, GET_GROUP_ID());
   }
   {
     ThreadListNode *node = lib::Thread::current().get_thread_list_node();
@@ -319,10 +324,6 @@ int ObTenantBase::end_run()
 {
   int ret = OB_SUCCESS;
   ObTenantEnv::set_tenant(nullptr);
-  ObCgroupCtrl *cgroup_ctrl = get_cgroup();
-  if (cgroup_ctrl != nullptr && cgroup_ctrl->is_valid()) {
-    ret = cgroup_ctrl->remove_self_from_cgroup(id_);
-  }
   {
     ThreadListNode *node = lib::Thread::current().get_thread_list_node();
     lib::ObMutexGuard guard(thread_list_lock_);
@@ -449,7 +450,7 @@ void ObTenantEnv::set_tenant(ObTenantBase *ctx)
   }
   get_tenant() = ctx;
   if (ctx == nullptr) {
-    ObTenantBase ctx_tmp(OB_INVALID_TENANT_ID);
+    ObTenantBase ctx_tmp(OB_INVALID_TENANT_ID, 0/*epoch*/);
     *get_tenant_local() = ctx_tmp;
     ob_get_tenant_id() = 0;
   } else {

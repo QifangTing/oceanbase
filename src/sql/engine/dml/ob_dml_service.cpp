@@ -100,6 +100,10 @@ int ObDMLService::check_row_null(const ObExprPtrIArray &row,
             ret = OB_BAD_NULL_ERROR;
             LOG_WARN("dml with ignore not supported in roaringbitmap type");
             LOG_USER_ERROR(OB_BAD_NULL_ERROR, column_infos.at(i).column_name_.length(), column_infos.at(i).column_name_.ptr());
+        } else if (ob_is_collection_sql_type(row.at(col_idx)->obj_meta_.get_type())) {
+            ret = OB_BAD_NULL_ERROR;
+            LOG_WARN("dml with ignore not supported in collection type");
+            LOG_USER_ERROR(OB_BAD_NULL_ERROR, column_infos.at(i).column_name_.length(), column_infos.at(i).column_name_.ptr());
         } else if (check_cascaded_reference(row.at(col_idx), row)) {
           //This column is dependent on other columns and cannot be modified again;
           //otherwise, it will necessitate a cascading recalculation of the dependent expression results.
@@ -1222,6 +1226,9 @@ int ObDMLService::init_dml_param(const ObDASDMLBaseCtDef &base_ctdef,
   }
   if (base_rtdef.is_for_foreign_key_check_) {
     dml_param.write_flag_.set_check_row_locked();
+  }
+  if (base_ctdef.is_update_uk_) {
+    dml_param.write_flag_.set_update_uk();
   }
   return ret;
 }

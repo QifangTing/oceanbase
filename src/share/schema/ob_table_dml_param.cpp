@@ -14,6 +14,7 @@
 #include "ob_table_dml_param.h"
 #include "share/schema/ob_column_schema.h"
 #include "storage/ob_i_store.h"
+#include "share/vector_index/ob_vector_index_util.h"
 
 namespace oceanbase
 {
@@ -47,7 +48,11 @@ ObTableSchemaParam::ObTableSchemaParam(ObIAllocator &allocator)
     lob_inrow_threshold_(OB_DEFAULT_LOB_INROW_THRESHOLD),
     multivalue_col_id_(OB_INVALID_ID),
     multivalue_arr_col_id_(OB_INVALID_ID),
-    data_table_rowkey_column_num_(0)
+    data_table_rowkey_column_num_(0),
+    vec_id_col_id_(OB_INVALID_ID),
+    vec_index_param_(),
+    vec_dim_(0),
+    vec_vector_col_id_(OB_INVALID_ID)
 {
 }
 
@@ -81,6 +86,10 @@ void ObTableSchemaParam::reset()
   multivalue_col_id_ = OB_INVALID_ID;
   multivalue_arr_col_id_ = OB_INVALID_ID;
   data_table_rowkey_column_num_ =0 ;
+  vec_id_col_id_ = OB_INVALID_ID;
+  vec_index_param_.reset();
+  vec_dim_ = 0;
+  vec_vector_col_id_ = OB_INVALID_ID;
 }
 
 int ObTableSchemaParam::convert(const ObTableSchema *schema)
@@ -157,6 +166,30 @@ int ObTableSchemaParam::convert(const ObTableSchema *schema)
           multivalue_arr_col_id_ = column_schema->get_column_id();
         }
       }
+    } else if (schema->is_vec_delta_buffer_type() || schema->is_vec_rowkey_vid_type() || schema->is_vec_vid_rowkey_type()) {
+      if (schema->is_vec_delta_buffer_type()) {
+        if (OB_FAIL(ob_write_string(allocator_, schema->get_index_params(), vec_index_param_))) {
+          LOG_WARN("fail to copy vec index param", K(ret), K(schema->get_index_params()));
+        } else if (OB_FAIL(ObVectorIndexUtil::get_vector_index_column_dim(*schema, vec_dim_))) {
+          LOG_WARN("fail to get vector col dim", K(ret));
+        } else if (vec_dim_ == 0) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("get vector dim is zero, fail to calc", K(ret), K(vec_dim_), KPC(schema));
+        }
+      }
+      for (int64_t i = 0; OB_SUCC(ret) && i < schema->get_column_count(); ++i) {
+        const ObColumnSchemaV2 *column_schema = schema->get_column_schema_by_idx(i);
+        if (OB_ISNULL(column_schema)) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("unexpected error, column schema is nullptr", K(ret), K(i), KPC(schema));
+        } else if (column_schema->is_vec_vid_column()) {
+          vec_id_col_id_ = column_schema->get_column_id();
+        } else if (schema->is_vec_delta_buffer_type()) {
+          if (column_schema->is_vec_vector_column()) {
+            vec_vector_col_id_ = column_schema->get_column_id();
+          }
+        }
+      }
     }
 
     if (OB_FAIL(ret)) {
@@ -212,7 +245,7 @@ int ObTableSchemaParam::convert(const ObTableSchema *schema)
     if (OB_SUCC(ret)) {
       if (OB_FAIL(tmp_cols_index.push_back(col_index))) {
         LOG_WARN("fail to push_back col_index", K(ret));
-      } else if (use_cs && OB_FAIL(schema->get_column_group_index(*column, cg_idx))) {
+      } else if (use_cs && OB_FAIL(schema->get_column_group_index(*column, false /*need_calculate_cg_idx*/, cg_idx))) {
         LOG_WARN("Fail to get column group index", K(ret));
       } else if (use_cs && OB_FAIL(tmp_cg_idxs.push_back(cg_idx))) {
         LOG_WARN("Fail to push back cg idx", K(ret));
@@ -500,6 +533,14 @@ OB_DEF_SERIALIZE(ObTableSchemaParam)
       LOG_WARN("fail to serialize fts parser name", K(ret));
     }
   }
+  OB_UNIS_ENCODE(vec_id_col_id_);
+  if (OB_SUCC(ret)) {
+    if (OB_FAIL(vec_index_param_.serialize(buf, buf_len, pos))) {
+      LOG_WARN("failed to serialize vec index param", K(ret));
+    }
+  }
+  OB_UNIS_ENCODE(vec_dim_);
+  OB_UNIS_ENCODE(vec_vector_col_id_);
   return ret;
 }
 
@@ -620,6 +661,17 @@ OB_DEF_DESERIALIZE(ObTableSchemaParam)
       LOG_WARN("fail to copy fts parser name", K(ret), K(tmp_name));
     }
   }
+  OB_UNIS_DECODE(vec_id_col_id_);
+  if (OB_SUCC(ret) && pos < data_len) {
+    ObString tmp_vec_index_param;
+    if (OB_FAIL(tmp_vec_index_param.deserialize(buf, data_len, pos))) {
+      LOG_WARN("fail to deserialize vec index param", K(ret));
+    } else if (OB_FAIL(ob_write_string(allocator_, tmp_vec_index_param, vec_index_param_))) {
+      LOG_WARN("fail to copy vec index param", K(ret), K(tmp_vec_index_param));
+    }
+  }
+  OB_UNIS_DECODE(vec_dim_);
+  OB_UNIS_DECODE(vec_vector_col_id_);
   return ret;
 }
 
@@ -667,6 +719,10 @@ OB_DEF_SERIALIZE_SIZE(ObTableSchemaParam)
   OB_UNIS_ADD_LEN(data_table_rowkey_column_num_);
   OB_UNIS_ADD_LEN(doc_id_col_id_);
   len += fts_parser_name_.get_serialize_size();
+  OB_UNIS_ADD_LEN(vec_id_col_id_);
+  len += vec_index_param_.get_serialize_size();
+  OB_UNIS_ADD_LEN(vec_dim_);
+  OB_UNIS_ADD_LEN(vec_vector_col_id_);
   return len;
 }
 

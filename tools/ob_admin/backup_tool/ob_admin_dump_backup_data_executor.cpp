@@ -51,7 +51,7 @@ int ObAdminDumpBackupDataUtil::read_archive_info_file(const common::ObString &ba
   if (OB_FAIL(storage_info.set(backup_path.ptr(), storage_info_str.ptr()))) {
     STORAGE_LOG(WARN, "failed to set storage info", K(ret), K(storage_info_str));
   } else if (OB_FAIL(util.get_file_length(backup_path.ptr(), &storage_info, file_length))) {
-    if (OB_BACKUP_FILE_NOT_EXIST != ret) {
+    if (OB_OBJECT_NOT_EXIST != ret) {
       STORAGE_LOG(WARN, "failed to get file length.", K(ret), K(backup_path));
     } else {
       STORAGE_LOG(WARN, "file not exist.", K(ret), K(backup_path));
@@ -62,7 +62,8 @@ int ObAdminDumpBackupDataUtil::read_archive_info_file(const common::ObString &ba
   } else if (OB_ISNULL(buf = reinterpret_cast<char*>(allocator.alloc(file_length)))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
     STORAGE_LOG(WARN, "failed to alloc buf", K(ret), K(backup_path), K(file_length));
-  } else if (OB_FAIL(util.read_single_file(backup_path.ptr(), &storage_info, buf, file_length, read_size))) {
+  } else if (OB_FAIL(util.read_single_file(backup_path.ptr(), &storage_info, buf, file_length, read_size,
+                                           ObStorageIdMod::get_default_id_mod()))) {
     STORAGE_LOG(WARN, "failed to read file.", K(ret), K(backup_path), K(file_length));
   } else if (file_length != read_size) {
     ret = OB_ERR_UNEXPECTED;
@@ -220,7 +221,8 @@ int ObAdminDumpBackupDataUtil::pread_file(const common::ObString &backup_path, c
     STORAGE_LOG(INFO, "read data len is zero", K(backup_path));
   } else if (OB_FAIL(storage_info.set(backup_path.ptr(), storage_info_str.ptr()))) {
     STORAGE_LOG(WARN, "failed to set storage info", K(ret), K(storage_info_str));
-  } else if (OB_FAIL(util.read_part_file(backup_path, &storage_info, buf, read_size, offset, real_read_size))) {
+  } else if (OB_FAIL(util.read_part_file(backup_path, &storage_info, buf, read_size, offset, real_read_size,
+                                         ObStorageIdMod::get_default_id_mod()))) {
     STORAGE_LOG(WARN, "failed to pread file", K(ret), K(backup_path), K(offset), K(read_size));
   } else if (OB_UNLIKELY(real_read_size != read_size)) {
     ret = OB_ERR_UNEXPECTED;
@@ -479,7 +481,7 @@ int ObAdminDumpBackupDataUtil::read_backup_info_file(const common::ObString &bac
   if (OB_FAIL(storage_info.set(backup_path.ptr(), storage_info_str.ptr()))) {
     STORAGE_LOG(WARN, "failed to set storage info", K(ret), K(storage_info_str));
   } else if (OB_FAIL(util.get_file_length(backup_path.ptr(), &storage_info, file_length))) {
-    if (OB_BACKUP_FILE_NOT_EXIST != ret) {
+    if (OB_OBJECT_NOT_EXIST != ret) {
       STORAGE_LOG(WARN, "failed to get file length.", K(ret), K(backup_path));
     } else {
       STORAGE_LOG(WARN, "file not exist.", K(ret), K(backup_path));
@@ -490,7 +492,8 @@ int ObAdminDumpBackupDataUtil::read_backup_info_file(const common::ObString &bac
   } else if (OB_ISNULL(buf = reinterpret_cast<char*>(allocator.alloc(file_length)))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
     STORAGE_LOG(WARN, "failed to alloc buf", K(ret), K(backup_path), K(file_length));
-  } else if (OB_FAIL(util.read_single_file(ObString(backup_path.ptr()), &storage_info, buf, file_length, read_size))) {
+  } else if (OB_FAIL(util.read_single_file(ObString(backup_path.ptr()), &storage_info, buf,
+                          file_length, read_size, ObStorageIdMod::get_default_id_mod()))) {
     STORAGE_LOG(WARN, "failed to read file.", K(ret), K(backup_path), K(file_length));
   } else if (file_length != read_size) {
     ret = OB_ERR_UNEXPECTED;
@@ -671,7 +674,7 @@ int ObAdminDumpBackupDataExecutor::do_check_exist_()
   int ret = OB_SUCCESS;
   bool is_exist = true; ;
   if (OB_FAIL(check_file_exist_(backup_path_, storage_info_))) {
-    if (OB_BACKUP_FILE_NOT_EXIST == ret) {
+    if (OB_OBJECT_NOT_EXIST == ret) {
       is_exist = false;
       ret = OB_SUCCESS;
     } else {
@@ -728,7 +731,7 @@ int ObAdminDumpBackupDataExecutor::check_file_exist_(const char *backup_path, co
   } else if (OB_FAIL(util.is_exist(backup_path, &storage_info, exist))) {
     STORAGE_LOG(WARN, "failed to check file exist", K(ret), K(backup_path), K(storage_info));
   } else if (OB_UNLIKELY(!exist)) {
-    ret = OB_BACKUP_FILE_NOT_EXIST;
+    ret = OB_OBJECT_NOT_EXIST;
     STORAGE_LOG(WARN, "index file do not exist", K(ret), K(backup_path));
   }
   return ret;
@@ -1028,7 +1031,7 @@ int ObAdminDumpBackupDataExecutor::dump_tenant_backup_path_()
       if (OB_FAIL(get_tenant_backup_set_infos_path_(backup_set_dir, path))) {
         STORAGE_LOG(WARN, "fail to get backup set infos path");
       } else if (OB_FAIL(ObAdminDumpBackupDataUtil::read_backup_info_file(path.get_obstr(), ObString(storage_info_), tenant_backup_set_infos))) {
-        if (OB_BACKUP_FILE_NOT_EXIST == ret) {
+        if (OB_OBJECT_NOT_EXIST == ret) {
           STORAGE_LOG(WARN, "backup set file is not exist", K(ret), K(path));
           ret = OB_SUCCESS;
         } else {
@@ -2505,7 +2508,7 @@ int ObAdminDumpBackupDataExecutor::dump_tenant_backup_set_infos_(const ObIArray<
                                               OB_MAX_TIME_STR_LENGTH,
                                               pos))) {
         STORAGE_LOG(WARN, "fail to convert scn to str", K(ret), K(time_zone_wrap), K(backup_set_desc));
-      } else if (OB_FAIL(databuff_printf(buf, OB_MAX_CHAR_LEN, "%ld", i+1))) {
+      } else if (OB_FAIL(databuff_printf(buf, OB_MAX_INTEGER_DISPLAY_WIDTH, "%ld", i+1))) {
         STORAGE_LOG(WARN, "fail to printf buf", K(ret), K(i));
       } else if (OB_FALSE_IT(backup_set_desc.to_string(min_restore_scn_str_buf, str_buf, OB_MAX_TEXT_LENGTH))) {
       } else {
@@ -2522,9 +2525,9 @@ int ObAdminDumpBackupDataExecutor::dump_backup_ls_meta_infos_file_(const storage
   PrintHelper::print_dump_title("ls meta infos");
   ARRAY_FOREACH_X(ls_meta_infos.ls_meta_packages_, i , cnt, OB_SUCC(ret)) {
     const storage::ObLSMetaPackage &meta_package = ls_meta_infos.ls_meta_packages_.at(i);
-    char buf[OB_MAX_CHAR_LEN] = { 0 };
+    char buf[OB_MAX_INTEGER_DISPLAY_WIDTH] = { 0 };
     char str_buf[OB_MAX_TEXT_LENGTH] = { 0 };
-    if (OB_FAIL(databuff_printf(buf, OB_MAX_CHAR_LEN, "%ld", i+1))) {
+    if (OB_FAIL(databuff_printf(buf, OB_MAX_INTEGER_DISPLAY_WIDTH, "%ld", i+1))) {
       STORAGE_LOG(WARN, "fail to printf buf", K(ret), K(i));
     } else if (OB_FALSE_IT(meta_package.to_string(str_buf, OB_MAX_TEXT_LENGTH))) {
     } else {
@@ -2647,9 +2650,9 @@ int ObAdminDumpBackupDataExecutor::dump_tenant_archive_piece_infos_file_(const s
   PrintHelper::print_dump_line("path", piece_infos_file.path_.ptr());
   ARRAY_FOREACH_X(piece_infos_file.his_frozen_pieces_, i , cnt, OB_SUCC(ret)) {
     const ObTenantArchivePieceAttr &piece = piece_infos_file.his_frozen_pieces_.at(i);
-    char buf[OB_MAX_CHAR_LEN] = { 0 };
+    char buf[OB_MAX_INTEGER_DISPLAY_WIDTH] = { 0 };
     char str_buf[OB_MAX_TEXT_LENGTH] = { 0 };
-    if (OB_FAIL(databuff_printf(buf, OB_MAX_CHAR_LEN, "%ld", i+1))) {
+    if (OB_FAIL(databuff_printf(buf, OB_MAX_INTEGER_DISPLAY_WIDTH, "%ld", i+1))) {
       STORAGE_LOG(WARN, "fail to printf buf", K(ret), K(i));
     } else if (OB_FALSE_IT(piece.to_string(str_buf, OB_MAX_TEXT_LENGTH))) {
     } else {
@@ -2991,9 +2994,9 @@ int ObAdminDumpBackupDataExecutor::dump_tenant_archive_path_()
     PrintHelper::print_dump_title("tenant archive round infos");
     ARRAY_FOREACH_X(rounds, i , cnt, OB_SUCC(ret)) {
       const ObTenantArchiveRoundAttr &round = rounds.at(i);
-      char buf[OB_MAX_CHAR_LEN] = { 0 };
+      char buf[OB_MAX_INTEGER_DISPLAY_WIDTH] = { 0 };
       char str_buf[OB_MAX_TEXT_LENGTH] = { 0 };
-      if (OB_FAIL(databuff_printf(buf, OB_MAX_CHAR_LEN, "%ld", i+1))) {
+      if (OB_FAIL(databuff_printf(buf, OB_MAX_INTEGER_DISPLAY_WIDTH, "%ld", i+1))) {
         STORAGE_LOG(WARN, "fail to printf buf", K(ret), K(i));
       } else if (OB_FALSE_IT(round.to_string(str_buf, OB_MAX_TEXT_LENGTH))) {
       } else {

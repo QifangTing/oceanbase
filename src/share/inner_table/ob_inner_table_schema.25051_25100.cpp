@@ -70,6 +70,7 @@ int ObInnerTableSchema::dba_coll_types_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -120,6 +121,7 @@ int ObInnerTableSchema::all_coll_types_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -170,6 +172,7 @@ int ObInnerTableSchema::user_coll_types_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -210,7 +213,7 @@ int ObInnerTableSchema::dba_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       D.DATABASE_NAME AS OWNER,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16484, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID())R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID           AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID           AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       D.IN_RECYCLEBIN = 0     UNION ALL     SELECT     CAST('SYS' AS VARCHAR2(30)) AS OWNER,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN RS.ROUTINE_NAME         WHEN 2 THEN RS.ROUTINE_NAME         WHEN 3 THEN PS.PACKAGE_NAME         WHEN 4 THEN TS.TYPE_NAME END AS OBJECT_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN NULL       WHEN 2 THEN NULL       WHEN 3 THEN RS.ROUTINE_NAME       WHEN 4 THEN RS.ROUTINE_NAME END AS PROCEDURE_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN RS.ROUTINE_ID       WHEN 2 THEN RS.ROUTINE_ID       WHEN 3 THEN PS.PACKAGE_ID       WHEN 4 THEN TS.TYPE_ID END AS OBJECT_ID,     CASE RS.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE RS.SUBPROGRAM_ID END AS SUBPROGRAM_ID,     CASE RS.OVERLOAD WHEN 0 THEN NULL ELSE RS.OVERLOAD END AS OVERLOAD,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,     CAST(DECODE(BITAND(RS.FLAG, 16384), 16484, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,     CAST(DECODE(BITAND(RS.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,     CAST(CASE WHEN TS1.TYPE_NAME IS NULL THEN NULL ELSE 'SYS' END AS VARCHAR2(30)) AS IMPLTYPEOWNER,     TS1.TYPE_NAME AS IMPLTYPENAME,     CAST(DECODE(BITAND(RS.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST(DECODE(BITAND(RS.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,     CAST(DECODE(BITAND(RS.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       RS.TENANT_ID AS ORIGIN_CON_ID   FROM     SYS.ALL_VIRTUAL_ROUTINE_SYS_AGENT RS     LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_SYS_AGENT PS ON RS.PACKAGE_ID = PS.PACKAGE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS ON RS.PACKAGE_ID = TS.TYPE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS1 ON RS.TYPE_ID = TS1.TYPE_ID   WHERE RS.ROUTINE_TYPE != 1 AND RS.ROUTINE_TYPE != 2 -- sys tenant only have sys package and type. )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       D.DATABASE_NAME AS OWNER,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16384, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID())R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID           AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID           AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       D.IN_RECYCLEBIN = 0     UNION ALL     SELECT     CAST('SYS' AS VARCHAR2(30)) AS OWNER,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN RS.ROUTINE_NAME         WHEN 2 THEN RS.ROUTINE_NAME         WHEN 3 THEN PS.PACKAGE_NAME         WHEN 4 THEN TS.TYPE_NAME END AS OBJECT_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN NULL       WHEN 2 THEN NULL       WHEN 3 THEN RS.ROUTINE_NAME       WHEN 4 THEN RS.ROUTINE_NAME END AS PROCEDURE_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN RS.ROUTINE_ID       WHEN 2 THEN RS.ROUTINE_ID       WHEN 3 THEN PS.PACKAGE_ID       WHEN 4 THEN TS.TYPE_ID END AS OBJECT_ID,     CASE RS.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE RS.SUBPROGRAM_ID END AS SUBPROGRAM_ID,     CASE RS.OVERLOAD WHEN 0 THEN NULL ELSE RS.OVERLOAD END AS OVERLOAD,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,     CAST(DECODE(BITAND(RS.FLAG, 16384), 16384, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,     CAST(DECODE(BITAND(RS.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,     CAST(CASE WHEN TS1.TYPE_NAME IS NULL THEN NULL ELSE 'SYS' END AS VARCHAR2(30)) AS IMPLTYPEOWNER,     TS1.TYPE_NAME AS IMPLTYPENAME,     CAST(DECODE(BITAND(RS.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST(DECODE(BITAND(RS.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,     CAST(DECODE(BITAND(RS.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       RS.TENANT_ID AS ORIGIN_CON_ID   FROM     SYS.ALL_VIRTUAL_ROUTINE_SYS_AGENT RS     LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_SYS_AGENT PS ON RS.PACKAGE_ID = PS.PACKAGE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS ON RS.PACKAGE_ID = TS.TYPE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS1 ON RS.TYPE_ID = TS1.TYPE_ID   WHERE RS.ROUTINE_TYPE != 1 AND RS.ROUTINE_TYPE != 2   UNION ALL   SELECT     DB.DATABASE_NAME AS OWNER,     TRG.TRIGGER_NAME AS OBJECT_NAME,     CAST(NULL AS VARCHAR2(128)) AS PROCEDURE_NAME,     TRG.TRIGGER_ID AS OBJECT_ID,     CAST(1 AS NUMBER) AS SUBPROGRAM_ID,     CAST(NULL AS NUMBER) AS OVERLOAD,     'TRIGGER' AS OBJECT_TYPE,     CAST('NO' AS VARCHAR2(3)) AS AGGREGATE,     CAST('NO' AS VARCHAR2(3)) AS PIPELINED,     CAST(NULL AS VARCHAR2(128)) AS IMPLTYPEOWNER,     CAST(NULL AS VARCHAR2(64)) AS IMPLTYPENAME,     CAST('NO' AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST('NO' AS VARCHAR2(3)) AS DETERMINISTIC,     CAST('DEFINER' AS VARCHAR2(12)) AS AUTHID,     TRG.TENANT_ID AS ORIGIN_CON_ID     FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB        ON TRG.DATABASE_ID = DB.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB.IN_RECYCLEBIN = 0 )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -220,6 +223,7 @@ int ObInnerTableSchema::dba_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -270,6 +274,7 @@ int ObInnerTableSchema::dba_arguments_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -320,6 +325,7 @@ int ObInnerTableSchema::dba_source_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -360,7 +366,7 @@ int ObInnerTableSchema::all_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       D.DATABASE_NAME AS OWNER,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16484, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID()) R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID           AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID           AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       (R.DATABASE_ID = USERENV('SCHEMAID')         OR USER_CAN_ACCESS_OBJ(12, R.ROUTINE_ID, R.DATABASE_ID) = 1)       AND D.IN_RECYCLEBIN = 0   UNION ALL   SELECT     CAST('SYS' AS VARCHAR2(30)) AS OWNER,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN RS.ROUTINE_NAME         WHEN 2 THEN RS.ROUTINE_NAME         WHEN 3 THEN PS.PACKAGE_NAME         WHEN 4 THEN TS.TYPE_NAME END AS OBJECT_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN NULL       WHEN 2 THEN NULL       WHEN 3 THEN RS.ROUTINE_NAME       WHEN 4 THEN RS.ROUTINE_NAME END AS PROCEDURE_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN RS.ROUTINE_ID       WHEN 2 THEN RS.ROUTINE_ID       WHEN 3 THEN PS.PACKAGE_ID       WHEN 4 THEN TS.TYPE_ID END AS OBJECT_ID,     CASE RS.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE RS.SUBPROGRAM_ID END AS SUBPROGRAM_ID,     CASE RS.OVERLOAD WHEN 0 THEN NULL ELSE RS.OVERLOAD END AS OVERLOAD,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,     CAST(DECODE(BITAND(RS.FLAG, 16384), 16484, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,     CAST(DECODE(BITAND(RS.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,     CAST(CASE WHEN TS1.TYPE_NAME IS NULL THEN NULL ELSE 'SYS' END AS VARCHAR2(30)) AS IMPLTYPEOWNER,     TS1.TYPE_NAME AS IMPLTYPENAME,     CAST(DECODE(BITAND(RS.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST(DECODE(BITAND(RS.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,     CAST(DECODE(BITAND(RS.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       RS.TENANT_ID AS ORIGIN_CON_ID   FROM     SYS.ALL_VIRTUAL_ROUTINE_SYS_AGENT RS     LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_SYS_AGENT PS ON RS.PACKAGE_ID = PS.PACKAGE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS ON RS.PACKAGE_ID = TS.TYPE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS1 ON RS.TYPE_ID = TS1.TYPE_ID   WHERE RS.ROUTINE_TYPE != 1 AND RS.ROUTINE_TYPE != 2 -- sys tenant only have sys package and type. )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       D.DATABASE_NAME AS OWNER,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16384, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT           WHERE TENANT_ID = EFFECTIVE_TENANT_ID()) R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID           AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID           AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       (R.DATABASE_ID = USERENV('SCHEMAID')         OR USER_CAN_ACCESS_OBJ(12, R.ROUTINE_ID, R.DATABASE_ID) = 1)       AND D.IN_RECYCLEBIN = 0   UNION ALL   SELECT     CAST('SYS' AS VARCHAR2(30)) AS OWNER,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN RS.ROUTINE_NAME         WHEN 2 THEN RS.ROUTINE_NAME         WHEN 3 THEN PS.PACKAGE_NAME         WHEN 4 THEN TS.TYPE_NAME END AS OBJECT_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN NULL       WHEN 2 THEN NULL       WHEN 3 THEN RS.ROUTINE_NAME       WHEN 4 THEN RS.ROUTINE_NAME END AS PROCEDURE_NAME,     CASE RS.ROUTINE_TYPE       WHEN 1 THEN RS.ROUTINE_ID       WHEN 2 THEN RS.ROUTINE_ID       WHEN 3 THEN PS.PACKAGE_ID       WHEN 4 THEN TS.TYPE_ID END AS OBJECT_ID,     CASE RS.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE RS.SUBPROGRAM_ID END AS SUBPROGRAM_ID,     CASE RS.OVERLOAD WHEN 0 THEN NULL ELSE RS.OVERLOAD END AS OVERLOAD,     CASE RS.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,     CAST(DECODE(BITAND(RS.FLAG, 16384), 16384, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,     CAST(DECODE(BITAND(RS.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,     CAST(CASE WHEN TS1.TYPE_NAME IS NULL THEN NULL ELSE 'SYS' END AS VARCHAR2(30)) AS IMPLTYPEOWNER,     TS1.TYPE_NAME AS IMPLTYPENAME,     CAST(DECODE(BITAND(RS.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST(DECODE(BITAND(RS.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,     CAST(DECODE(BITAND(RS.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       RS.TENANT_ID AS ORIGIN_CON_ID   FROM     SYS.ALL_VIRTUAL_ROUTINE_SYS_AGENT RS     LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_SYS_AGENT PS ON RS.PACKAGE_ID = PS.PACKAGE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS ON RS.PACKAGE_ID = TS.TYPE_ID     LEFT JOIN SYS.ALL_VIRTUAL_TYPE_SYS_AGENT TS1 ON RS.TYPE_ID = TS1.TYPE_ID   WHERE RS.ROUTINE_TYPE != 1 AND RS.ROUTINE_TYPE != 2   UNION ALL   SELECT     DB.DATABASE_NAME AS OWNER,     TRG.TRIGGER_NAME AS OBJECT_NAME,     CAST(NULL AS VARCHAR2(128)) AS PROCEDURE_NAME,     TRG.TRIGGER_ID AS OBJECT_ID,     CAST(1 AS NUMBER) AS SUBPROGRAM_ID,     CAST(NULL AS NUMBER) AS OVERLOAD,     'TRIGGER' AS OBJECT_TYPE,     CAST('NO' AS VARCHAR2(3)) AS AGGREGATE,     CAST('NO' AS VARCHAR2(3)) AS PIPELINED,     CAST(NULL AS VARCHAR2(128)) AS IMPLTYPEOWNER,     CAST(NULL AS VARCHAR2(64)) AS IMPLTYPENAME,     CAST('NO' AS VARCHAR2(3)) AS PARALLEL,     CAST('NO' AS VARCHAR2(3)) AS INTERFACE,     CAST('NO' AS VARCHAR2(3)) AS DETERMINISTIC,     CAST('DEFINER' AS VARCHAR2(12)) AS AUTHID,     TRG.TENANT_ID AS ORIGIN_CON_ID     FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG        INNER JOIN        SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB        ON TRG.DATABASE_ID = DB.DATABASE_ID           AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()           AND DB.TENANT_ID = EFFECTIVE_TENANT_ID()           AND (TRG.DATABASE_ID = USERENV('SCHEMAID')               OR USER_CAN_ACCESS_OBJ(1, abs(nvl(TRG.BASE_OBJECT_ID,0)), TRG.DATABASE_ID) = 1)           AND DB.IN_RECYCLEBIN = 0 )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -370,6 +376,7 @@ int ObInnerTableSchema::all_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -420,6 +427,7 @@ int ObInnerTableSchema::all_arguments_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -470,6 +478,7 @@ int ObInnerTableSchema::all_source_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -510,7 +519,7 @@ int ObInnerTableSchema::user_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_collation_type(ObCharset::get_default_collation(ObCharset::get_default_charset()));
 
   if (OB_SUCC(ret)) {
-    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16484, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT         WHERE TENANT_ID = EFFECTIVE_TENANT_ID()) R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID         AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID         AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       D.IN_RECYCLEBIN = 0       AND R.DATABASE_ID = USERENV('SCHEMAID') )__"))) {
+    if (OB_FAIL(table_schema.set_view_definition(R"__(     SELECT       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_NAME         WHEN 2 THEN R.ROUTINE_NAME         WHEN 3 THEN P.PACKAGE_NAME         WHEN 4 THEN T.TYPE_NAME END AS OBJECT_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN NULL         WHEN 2 THEN NULL         WHEN 3 THEN R.ROUTINE_NAME         WHEN 4 THEN R.ROUTINE_NAME END AS PROCEDURE_NAME,       CASE R.ROUTINE_TYPE         WHEN 1 THEN R.ROUTINE_ID         WHEN 2 THEN R.ROUTINE_ID         WHEN 3 THEN P.PACKAGE_ID         WHEN 4 THEN T.TYPE_ID END AS OBJECT_ID,       CASE R.SUBPROGRAM_ID WHEN 0 THEN 1 ELSE R.SUBPROGRAM_ID END AS SUBPROGRAM_ID,       CASE R.OVERLOAD WHEN 0 THEN NULL ELSE R.OVERLOAD END AS OVERLOAD,       CASE R.ROUTINE_TYPE         WHEN 1 THEN 'PROCEDURE'         WHEN 2 THEN 'FUNCTION'         WHEN 3 THEN 'PACKAGE'         WHEN 4 THEN 'TYPE' END AS OBJECT_TYPE,       CAST(DECODE(BITAND(R.FLAG, 16384), 16384, 'YES', 'NO') AS VARCHAR(3)) AS AGGREGATE,       CAST(DECODE(BITAND(R.FLAG, 128), 128, 'YES', 'NO') AS VARCHAR2(3)) AS PIPELINED,       D1.DATABASE_NAME AS IMPLTYPEOWNER,       T1.TYPE_NAME AS IMPLTYPENAME,       CAST(DECODE(BITAND(R.FLAG, 8), 8, 'YES', 'NO') AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST(DECODE(BITAND(R.FLAG, 4), 4, 'YES', 'NO') AS VARCHAR2(3)) AS DETERMINISTIC,       CAST(DECODE(BITAND(R.FLAG, 16), 16, 'INVOKER', 'DEFINER') AS VARCHAR2(12)) AS AUTHID,       R.TENANT_ID AS ORIGIN_CON_ID     FROM       (SELECT * FROM SYS.ALL_VIRTUAL_ROUTINE_REAL_AGENT         WHERE TENANT_ID = EFFECTIVE_TENANT_ID()) R       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D ON R.DATABASE_ID = D.DATABASE_ID         AND D.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_PACKAGE_REAL_AGENT P ON R.PACKAGE_ID = P.PACKAGE_ID         AND P.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T ON R.PACKAGE_ID = T.TYPE_ID           AND T.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_TYPE_REAL_AGENT T1 ON R.TYPE_ID = T1.TYPE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()       LEFT JOIN SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT D1 ON T1.DATABASE_ID = D1.DATABASE_ID           AND T1.TENANT_ID = EFFECTIVE_TENANT_ID()     WHERE       D.IN_RECYCLEBIN = 0       AND R.DATABASE_ID = USERENV('SCHEMAID')     UNION ALL     SELECT       TRG.TRIGGER_NAME AS OBJECT_NAME,       CAST(NULL AS VARCHAR2(128)) AS PROCEDURE_NAME,       TRG.TRIGGER_ID AS OBJECT_ID,       CAST(1 AS NUMBER) AS SUBPROGRAM_ID,       CAST(NULL AS NUMBER) AS OVERLOAD,       'TRIGGER' AS OBJECT_TYPE,       CAST('NO' AS VARCHAR2(3)) AS AGGREGATE,       CAST('NO' AS VARCHAR2(3)) AS PIPELINED,       CAST(NULL AS VARCHAR2(128)) AS IMPLTYPEOWNER,       CAST(NULL AS VARCHAR2(64)) AS IMPLTYPENAME,       CAST('NO' AS VARCHAR2(3)) AS PARALLEL,       CAST('NO' AS VARCHAR2(3)) AS INTERFACE,       CAST('NO' AS VARCHAR2(3)) AS DETERMINISTIC,       CAST('DEFINER' AS VARCHAR2(12)) AS AUTHID,       TRG.TENANT_ID AS ORIGIN_CON_ID     FROM SYS.ALL_VIRTUAL_TENANT_TRIGGER_REAL_AGENT TRG         INNER JOIN         SYS.ALL_VIRTUAL_DATABASE_REAL_AGENT DB         ON TRG.DATABASE_ID = DB.DATABASE_ID             AND TRG.TENANT_ID = EFFECTIVE_TENANT_ID()             AND DB.TENANT_ID = EFFECTIVE_TENANT_ID()             AND TRG.DATABASE_ID = USERENV('SCHEMAID')             AND DB.IN_RECYCLEBIN = 0 )__"))) {
       LOG_ERROR("fail to set view_definition", K(ret));
     }
   }
@@ -520,6 +529,7 @@ int ObInnerTableSchema::user_procedures_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -570,6 +580,7 @@ int ObInnerTableSchema::user_arguments_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -620,6 +631,7 @@ int ObInnerTableSchema::user_source_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -670,6 +682,7 @@ int ObInnerTableSchema::dba_part_key_columns_ora_schema(ObTableSchema &table_sch
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -720,6 +733,7 @@ int ObInnerTableSchema::all_part_key_columns_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -770,6 +784,7 @@ int ObInnerTableSchema::user_part_key_columns_schema(ObTableSchema &table_schema
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -820,6 +835,7 @@ int ObInnerTableSchema::dba_subpart_key_columns_ora_schema(ObTableSchema &table_
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -870,6 +886,7 @@ int ObInnerTableSchema::all_subpart_key_columns_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -920,6 +937,7 @@ int ObInnerTableSchema::user_subpart_key_columns_schema(ObTableSchema &table_sch
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -970,6 +988,7 @@ int ObInnerTableSchema::dba_views_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1020,6 +1039,7 @@ int ObInnerTableSchema::all_views_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1070,6 +1090,7 @@ int ObInnerTableSchema::user_views_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1120,6 +1141,7 @@ int ObInnerTableSchema::all_tab_partitions_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1170,6 +1192,7 @@ int ObInnerTableSchema::all_tab_subpartitions_ora_schema(ObTableSchema &table_sc
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1220,6 +1243,7 @@ int ObInnerTableSchema::all_part_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1270,6 +1294,7 @@ int ObInnerTableSchema::dba_part_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1320,6 +1345,7 @@ int ObInnerTableSchema::user_part_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1370,6 +1396,7 @@ int ObInnerTableSchema::dba_tab_partitions_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1420,6 +1447,7 @@ int ObInnerTableSchema::user_tab_partitions_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1470,6 +1498,7 @@ int ObInnerTableSchema::dba_tab_subpartitions_ora_schema(ObTableSchema &table_sc
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1520,6 +1549,7 @@ int ObInnerTableSchema::user_tab_subpartitions_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1570,6 +1600,7 @@ int ObInnerTableSchema::dba_subpartition_templates_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1620,6 +1651,7 @@ int ObInnerTableSchema::all_subpartition_templates_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1670,6 +1702,7 @@ int ObInnerTableSchema::user_subpartition_templates_ora_schema(ObTableSchema &ta
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1720,6 +1753,7 @@ int ObInnerTableSchema::dba_part_indexes_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1770,6 +1804,7 @@ int ObInnerTableSchema::all_part_indexes_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1820,6 +1855,7 @@ int ObInnerTableSchema::user_part_indexes_ora_schema(ObTableSchema &table_schema
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1870,6 +1906,7 @@ int ObInnerTableSchema::all_all_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1920,6 +1957,7 @@ int ObInnerTableSchema::dba_all_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -1970,6 +2008,7 @@ int ObInnerTableSchema::user_all_tables_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2020,6 +2059,7 @@ int ObInnerTableSchema::dba_profiles_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2070,6 +2110,7 @@ int ObInnerTableSchema::user_profiles_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2120,6 +2161,7 @@ int ObInnerTableSchema::all_profiles_ora_schema(ObTableSchema &table_schema)
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2170,6 +2212,7 @@ int ObInnerTableSchema::all_mview_comments_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2220,6 +2263,7 @@ int ObInnerTableSchema::user_mview_comments_ora_schema(ObTableSchema &table_sche
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2270,6 +2314,7 @@ int ObInnerTableSchema::dba_mview_comments_ora_schema(ObTableSchema &table_schem
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2320,6 +2365,7 @@ int ObInnerTableSchema::all_scheduler_program_args_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2370,6 +2416,7 @@ int ObInnerTableSchema::dba_scheduler_program_args_ora_schema(ObTableSchema &tab
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2420,6 +2467,7 @@ int ObInnerTableSchema::user_scheduler_program_args_ora_schema(ObTableSchema &ta
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2470,6 +2518,7 @@ int ObInnerTableSchema::all_scheduler_job_args_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;
@@ -2520,6 +2569,7 @@ int ObInnerTableSchema::dba_scheduler_job_args_ora_schema(ObTableSchema &table_s
   table_schema.set_progressive_merge_round(1);
   table_schema.set_storage_format_version(3);
   table_schema.set_tablet_id(0);
+  table_schema.set_micro_index_clustered(false);
 
   table_schema.set_max_used_column_id(column_id);
   return ret;

@@ -1709,6 +1709,24 @@ int ObDMLStmtPrinter::print_base_table(const TableItem *table_item)
           DATA_PRINTF(")");
         }
       }
+
+      if (OB_SUCC(ret) && OB_NOT_NULL(table_item->sample_info_)) {
+        if (SampleInfo::SampleMethod::BLOCK_SAMPLE == table_item->sample_info_->method_) {
+          DATA_PRINTF(" sample block(");
+          DATA_PRINTF("%lf", table_item->sample_info_->percent_);
+          DATA_PRINTF(")");
+        } else if (SampleInfo::SampleMethod::ROW_SAMPLE  == table_item->sample_info_->method_) {
+          DATA_PRINTF(" sample(");
+          DATA_PRINTF("%lf", table_item->sample_info_->percent_);
+          DATA_PRINTF(")");
+        }
+        if (table_item->sample_info_->seed_ != -1) {
+          DATA_PRINTF(" seed(");
+          DATA_PRINTF(" %ld ", table_item->sample_info_->seed_);
+          DATA_PRINTF(")");
+        }
+      }
+
       // flashback query
       if (OB_SUCC(ret)) {
         bool explain_non_extend = false;
@@ -1992,6 +2010,18 @@ int ObDMLStmtPrinter::print_order_by()
     }
   }
 
+  return ret;
+}
+
+int ObDMLStmtPrinter::print_approx()
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(stmt_) || OB_ISNULL(buf_) || OB_ISNULL(pos_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("stmt_ is NULL or buf_ is NULL or pos_ is NULL", K(ret));
+  } else if (stmt_->has_vec_approx()) {
+    DATA_PRINTF(" approx ");
+  }
   return ret;
 }
 

@@ -51,6 +51,16 @@ public:
                             const IndexDMLInfo &index_dml_info,
                             ObUpdCtDef &upd_ctdef);
 
+  int check_is_update_local_unique_index(ObLogDelUpd &op,
+                                         uint64_t index_tid,
+                                         ObIArray<uint64_t> &update_cids,
+                                         ObDASUpdCtDef &das_upd_ctdef);
+
+  int check_is_update_uk(ObLogDelUpd &op,
+                         const IndexDMLInfo &index_dml_info,
+                         ObIArray<uint64_t> &update_cids,
+                         ObDASUpdCtDef &das_upd_ctdef);
+
   int generate_lock_ctdef(ObLogForUpdate &op,
                           const IndexDMLInfo &index_dml_info,
                           ObLockCtDef *&lock_ctdef);
@@ -125,10 +135,10 @@ private:
                                        ObTableID index_tid,
                                        ObDASUpdCtDef &das_upd_ctdef,
                                        const IndexDMLInfo &index_dml_info,
+                                       const ObIArray<uint64_t> &upd_cids,
                                        bool is_primary_index,
                                        bool &need_all_columns,
                                        ObIArray<uint64_t> &minimal_column_ids);
-
 
   int append_upd_old_row_cid(ObLogicalOperator &op,
                              ObSchemaGetterGuard *schema_guard,
@@ -141,7 +151,7 @@ private:
   int check_upd_need_all_columns(ObLogDelUpd &op,
                                  ObSchemaGetterGuard *schema_guard,
                                  const ObTableSchema *table_schema,
-                                 const IndexDMLInfo &index_dml_info,
+                                 const ObIArray<uint64_t> &upd_cids,
                                  bool is_primary_index,
                                  bool &need_all_columns);
 
@@ -160,7 +170,7 @@ private:
 
   int check_has_upd_rowkey(ObLogicalOperator &op,
                            const ObTableSchema *table_schema,
-                           const IndexDMLInfo &index_dml_info,
+                           const ObIArray<uint64_t> &upd_cids,
                            bool &upd_rowkey);
 
   int append_udt_hidden_column_id(const ObTableSchema *table_schema,
@@ -170,7 +180,7 @@ private:
 
   int check_unique_key_is_updated(ObSchemaGetterGuard *schema_guard,
                                   const ObTableSchema *table_schema,
-                                  const IndexDMLInfo &index_dml_info,
+                                  const ObIArray<uint64_t> &upd_cids,
                                   bool &is_updated);
 
   int append_time_type_column_id(const ObTableSchema *table_schema,
@@ -226,6 +236,12 @@ private:
                             uint32_t proj_idx,
                             ObDASDMLBaseCtDef &das_ctdef,
                             IntFixedArray &row_projector);
+  template<typename ExprType>
+  int add_vec_idx_col_projector(const ObIArray<ExprType*> &cur_row,
+                                const ObIArray<ObRawExpr*> &full_row,
+                                const ObIArray<uint64_t> &dml_column_ids,
+                                ObDASDMLBaseCtDef &das_ctdef,
+                                IntFixedArray &row_projector);
   int fill_multivalue_extra_info_on_table_param(
                             share::schema::ObSchemaGetterGuard *guard,
                             const ObTableSchema *index_schema,
@@ -378,7 +394,25 @@ private:
                                  const common::ObIArray<ObRawExpr*> &new_row,
                                  DASInsCtDefArray &ins_ctdefs);
   int generate_access_exprs(const common::ObIArray<ObColumnRefRawExpr*> &columns,
-                               common::ObIArray<ObRawExpr*> &access_exprs);
+                            const ObLogicalOperator &op,
+                            const bool need_vec_vid,
+                            const uint64_t vec_vid_col_id,
+                            common::ObIArray<ObRawExpr*> &access_exprs,
+                            common::ObIArray<ObRawExpr*> &vec_vid_expr);
+  int generate_scan_with_vec_vid_ctdef_if_need(ObLogInsert &op,
+                                              const IndexDMLInfo &index_dml_info,
+                                              ObDASScanCtDef &scan_ctdef,
+                                              ObDASAttachSpec &attach_spec);
+  int generate_rowkey_vid_ctdef(ObLogInsert &op,
+                                const IndexDMLInfo &index_dml_info,
+                                ObDASAttachSpec &attach_spec,
+                                ObDASScanCtDef *&rowkey_vid_scan_ctdef);
+  int generate_rowkey_vid_access_expr(const common::ObIArray<ObColumnRefRawExpr *> &columns,
+                                      const ObTableSchema &rowkey_vid,
+                                      ObDASScanCtDef *ctdef);
+  int check_need_vec_vid_merge_iter(ObLogicalOperator &op,
+                                   const uint64_t ref_table_id,
+                                   bool &need_vec_vid_merge_iter);
 private:
   int need_fire_update_event(const ObTableSchema &table_schema,
                             const ObString &update_events,

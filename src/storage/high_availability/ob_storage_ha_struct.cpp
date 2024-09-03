@@ -870,8 +870,8 @@ bool ObMigrationOpArg::is_valid() const
       && src_.is_valid()
       && dst_.is_valid()
       && (paxos_replica_number_ > 0 || ObMigrationOpType::REBUILD_LS_OP == type_)
-      && ObMigrationOpType::MIGRATE_LS_OP == type_ ?
-         (src_.get_server() != dst_.get_server()) : true;
+      && (ObMigrationOpType::MIGRATE_LS_OP == type_ ?
+         (src_.get_server() != dst_.get_server()) : true);
 }
 
 void ObMigrationOpArg::reset()
@@ -1397,10 +1397,114 @@ int ObLSRebuildType::set_type(int32_t type)
 
 OB_SERIALIZE_MEMBER(ObLSRebuildType, type_);
 
+/******************ObRebuildTabletIDArray*********************/
+ObRebuildTabletIDArray::ObRebuildTabletIDArray()
+  : count_(0)
+{
+}
+
+ObRebuildTabletIDArray::~ObRebuildTabletIDArray()
+{
+}
+
+OB_DEF_SERIALIZE(ObRebuildTabletIDArray)
+{
+  int ret = OB_SUCCESS;
+  OB_UNIS_ENCODE_ARRAY(id_array_, count_);
+  return ret;
+}
+
+OB_DEF_SERIALIZE_SIZE(ObRebuildTabletIDArray)
+{
+  int64_t len = 0;
+  OB_UNIS_ADD_LEN_ARRAY(id_array_, count_);
+  return len;
+}
+
+OB_DEF_DESERIALIZE(ObRebuildTabletIDArray)
+{
+  int ret = OB_SUCCESS;
+  int64_t count = 0;
+
+  OB_UNIS_DECODE(count);
+  if (OB_SUCC(ret)) {
+    count_ = count;
+  }
+  OB_UNIS_DECODE_ARRAY(id_array_, count_);
+  return ret;
+}
+
+int ObRebuildTabletIDArray::push_back(const common::ObTabletID &tablet_id)
+{
+  int ret = OB_SUCCESS;
+  if (!tablet_id.is_valid()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("tablet id is invalid", K(ret), K(tablet_id));
+  } else if (count_ >= MAX_TABLET_COUNT) {
+    ret = OB_SIZE_OVERFLOW;
+    LOG_WARN("rebuild tablet id array is size overflow", K(ret), K(count_));
+  } else {
+    id_array_[count_] = tablet_id;
+    count_++;
+  }
+  return ret;
+}
+
+int ObRebuildTabletIDArray::assign(const common::ObIArray<common::ObTabletID> &tablet_id_array)
+{
+  int ret = OB_SUCCESS;
+  if (tablet_id_array.count() > MAX_TABLET_COUNT) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("cannot assign tablet id array", K(ret), K(tablet_id_array));
+  } else {
+    count_ = 0;
+    for (int64_t i = 0; OB_SUCC(ret) && i < tablet_id_array.count(); ++i) {
+      const common::ObTabletID &tablet_id = tablet_id_array.at(i);
+      if (OB_FAIL(push_back(tablet_id))) {
+        LOG_WARN("failed to push tablet id into array", K(ret));
+      }
+    }
+  }
+  return ret;
+}
+
+int ObRebuildTabletIDArray::assign(const ObRebuildTabletIDArray &tablet_id_array)
+{
+  int ret = OB_SUCCESS;
+  if (tablet_id_array.count() > MAX_TABLET_COUNT) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("cannot assign tablet id array", K(ret), K(tablet_id_array));
+  } else {
+    count_ = 0;
+    for (int64_t i = 0; OB_SUCC(ret) && i < tablet_id_array.count(); ++i) {
+      const common::ObTabletID &tablet_id = tablet_id_array.at(i);
+      if (OB_FAIL(push_back(tablet_id))) {
+        LOG_WARN("failed to push tablet id into array", K(ret));
+      }
+    }
+  }
+  return ret;
+}
+
+int ObRebuildTabletIDArray::get_tablet_id_array(
+    common::ObIArray<common::ObTabletID> &tablet_id_array)
+{
+  int ret = OB_SUCCESS;
+  tablet_id_array.reset();
+  for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
+    if (OB_FAIL(tablet_id_array.push_back(id_array_[i]))) {
+      LOG_WARN("failed to push tablet id into array", K(ret), K(count_), K(i));
+    }
+  }
+  return ret;
+}
+
 /******************ObLSRebuildInfo*********************/
 ObLSRebuildInfo::ObLSRebuildInfo()
   : status_(),
-    type_()
+    type_(),
+    tablet_id_array_(),
+    src_()
 {
 }
 
@@ -1408,6 +1512,8 @@ void ObLSRebuildInfo::reset()
 {
   status_.reset();
   type_.reset();
+  tablet_id_array_.reset();
+  src_.reset();
 }
 
 bool ObLSRebuildInfo::is_valid() const
@@ -1429,7 +1535,23 @@ bool ObLSRebuildInfo::operator ==(const ObLSRebuildInfo &other) const
       && type_ == other.type_;
 }
 
-OB_SERIALIZE_MEMBER(ObLSRebuildInfo, status_, type_);
+int ObLSRebuildInfo::assign(const ObLSRebuildInfo &info)
+{
+  int ret = OB_SUCCESS;
+  if (!info.is_valid()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("assign ls rebuild info get invalid argument", K(ret), K(info));
+  } else if (OB_FAIL(tablet_id_array_.assign(info.tablet_id_array_))) {
+    LOG_WARN("failed to assign tablet id array", K(ret), K(info));
+  } else {
+    status_ = info.status_;
+    type_ = info.type_;
+    src_ = info.src_;
+  }
+  return ret;
+}
+
+OB_SERIALIZE_MEMBER(ObLSRebuildInfo, status_, type_, tablet_id_array_, src_);
 
 ObTabletBackfillInfo::ObTabletBackfillInfo()
   : tablet_id_(),
@@ -1912,6 +2034,83 @@ bool ObLogicTabletID::operator != (const ObLogicTabletID &other) const
   return !(*this == other);
 }
 
+ObLSMemberListInfo::ObLSMemberListInfo()
+  : learner_list_(),
+    leader_addr_(),
+    member_list_()
+{
+}
+
+void ObLSMemberListInfo::reset()
+{
+  learner_list_.reset();
+  leader_addr_.reset();
+  member_list_.reset();
+}
+
+bool ObLSMemberListInfo::is_valid() const
+{
+  return leader_addr_.is_valid() && !member_list_.empty();
+}
+
+int ObLSMemberListInfo::assign(const ObLSMemberListInfo &info)
+{
+  int ret = OB_SUCCESS;
+  if (!info.is_valid()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("invalid argument!", K(ret), K(info));
+  } else if (OB_FAIL(member_list_.assign(info.member_list_))) {
+    LOG_WARN("failed to assign member list", K(ret), K(info));
+  } else {
+    learner_list_ = info.learner_list_;
+    leader_addr_ = info.leader_addr_;
+  }
+  return ret;
+}
+
+ObMigrationChooseSrcHelperInitParam::ObMigrationChooseSrcHelperInitParam()
+  : tenant_id_(OB_INVALID_ID),
+    ls_id_(),
+    local_clog_checkpoint_scn_(),
+    arg_(),
+    info_()
+{
+}
+
+void ObMigrationChooseSrcHelperInitParam::reset()
+{
+  tenant_id_ = OB_INVALID_ID;
+  ls_id_.reset();
+  local_clog_checkpoint_scn_.reset();
+  arg_.reset();
+  info_.reset();
+}
+
+bool ObMigrationChooseSrcHelperInitParam::is_valid() const
+{
+  return OB_INVALID_ID != tenant_id_
+      && ls_id_.is_valid()
+      && local_clog_checkpoint_scn_.is_valid()
+      && arg_.is_valid()
+      && info_.is_valid();
+}
+
+int ObMigrationChooseSrcHelperInitParam::assign(const ObMigrationChooseSrcHelperInitParam &param)
+{
+  int ret = OB_SUCCESS;
+  if (!param.is_valid()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("invalid argument!", K(ret), K(param));
+  } else if (OB_FAIL(info_.assign(param.info_))) {
+    LOG_WARN("failed to assign param", K(ret), K(param));
+  } else {
+    tenant_id_ = param.tenant_id_;
+    ls_id_ = param.ls_id_;
+    local_clog_checkpoint_scn_ = param.local_clog_checkpoint_scn_;
+    arg_ = param.arg_;
+  }
+  return ret;
+}
 }
 }
 

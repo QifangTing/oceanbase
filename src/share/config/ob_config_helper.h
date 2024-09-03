@@ -347,6 +347,61 @@ private:
   DISALLOW_COPY_AND_ASSIGN(ObConfigAuditTrailChecker);
 };
 
+class ObConfigAuditLogCompressionChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigAuditLogCompressionChecker() {}
+  virtual ~ObConfigAuditLogCompressionChecker() {}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigAuditLogCompressionChecker);
+};
+
+class ObConfigAuditLogPathChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigAuditLogPathChecker() {}
+  virtual ~ObConfigAuditLogPathChecker() {}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigAuditLogPathChecker);
+};
+
+class ObConfigAuditLogFormatChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigAuditLogFormatChecker() {}
+  virtual ~ObConfigAuditLogFormatChecker() {}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigAuditLogFormatChecker);
+};
+
+class ObConfigAuditLogQuerySQLChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigAuditLogQuerySQLChecker() {}
+  virtual ~ObConfigAuditLogQuerySQLChecker() {}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigAuditLogQuerySQLChecker);
+};
+
+class ObConfigAuditLogStrategyChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigAuditLogStrategyChecker() {}
+  virtual ~ObConfigAuditLogStrategyChecker() {}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigAuditLogStrategyChecker);
+};
+
 class ObConfigWorkAreaPolicyChecker
   : public ObConfigChecker
 {
@@ -405,6 +460,15 @@ class ObConfigTenantMemoryChecker
 public:
   ObConfigTenantMemoryChecker() {}
   virtual ~ObConfigTenantMemoryChecker() {};
+  bool check(const ObConfigItem &t) const;
+};
+
+class ObConfigTenantDataDiskChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigTenantDataDiskChecker() {}
+  virtual ~ObConfigTenantDataDiskChecker() {};
   bool check(const ObConfigItem &t) const;
 };
 
@@ -657,16 +721,6 @@ public:
   virtual ~ObConfigCapacityParser() {}
   static int64_t get(const char *str, bool &valid, bool check_unit = true, bool use_byte = false);
 private:
-  enum CAP_UNIT
-  {
-    // shift bits between unit of byte and that
-    CAP_B = 0,
-    CAP_KB = 10,
-    CAP_MB = 20,
-    CAP_GB = 30,
-    CAP_TB = 40,
-    CAP_PB = 50,
-  };
   DISALLOW_COPY_AND_ASSIGN(ObConfigCapacityParser);
 };
 
@@ -857,8 +911,29 @@ private:
 };
 
 
+class ObConfigRegexpEngineChecker
+  : public ObConfigChecker
+{
+public:
+  ObConfigRegexpEngineChecker(){}
+  virtual ~ObConfigRegexpEngineChecker(){}
+  bool check(const ObConfigItem &t) const;
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigRegexpEngineChecker);
+};
+
 typedef __ObConfigContainer<ObConfigStringKey,
                             ObConfigItem, OB_MAX_CONFIG_NUMBER> ObConfigContainer;
+
+class ObConfigVectorMemoryChecker
+{
+public:
+  static bool check(const uint64_t tenant_id, const obrpc::ObAdminSetConfigItem &t);
+
+private:
+  DISALLOW_COPY_AND_ASSIGN(ObConfigVectorMemoryChecker);
+};
+
 } // namespace common
 } // namespace oceanbase
 

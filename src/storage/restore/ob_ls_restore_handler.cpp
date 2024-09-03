@@ -1102,14 +1102,12 @@ int ObILSRestoreState::follower_fill_tablet_group_restore_arg_(
       LOG_WARN("fail to get location", K(ret), KPC(ls_));
     } else if (OB_FAIL(location.get_leader(leader))) {
       LOG_WARN("fail to get leader location", K(ret), K(location));
-    } else if (OB_FAIL(tablet_group_restore_arg.src_.set_replica_type(leader.get_replica_type()))) {
-      LOG_WARN("fail to set src replica type", K(ret), K(leader));
-    } else if (OB_FAIL(tablet_group_restore_arg.src_.set_member(ObMember(leader.get_server(), 0/*invalid timestamp is ok*/)))) {
-      LOG_WARN("fail to set src member", K(ret));
-    } else if (OB_FAIL(tablet_group_restore_arg.dst_.set_replica_type(REPLICA_TYPE_FULL))) {
-      LOG_WARN("fail to set dst replica type", K(ret));
-    } else if (OB_FAIL(tablet_group_restore_arg.dst_.set_member(ObMember(GCTX.self_addr(), 0/*invalid timestamp is ok*/)))) {
-      LOG_WARN("fail to set dst member", K(ret), "server", GCTX.self_addr());
+    } else if (OB_FAIL(tablet_group_restore_arg.src_.init(
+                        leader.get_server(), 0/*invalid timestamp is ok*/, leader.get_replica_type()))) {
+      LOG_WARN("fail to init src_", K(ret), K(leader));
+    } else if (OB_FAIL(tablet_group_restore_arg.dst_.init(
+                        GCTX.self_addr(), 0/*invalid timestamp is ok*/, REPLICA_TYPE_FULL))) {
+      LOG_WARN("fail to init dst_", K(ret), K(GCTX.self_addr()));
     } else if (OB_FAIL(append(tablet_group_restore_arg.tablet_id_array_, tablet_need_restore))) {
       LOG_WARN("fail to append tablet id", K(ret), K(tablet_need_restore));
     } else if (OB_FAIL(tablet_group_restore_arg.restore_base_info_.copy_from(*ls_restore_arg_))) {
@@ -1163,7 +1161,7 @@ int ObILSRestoreState::get_follower_server_(ObIArray<ObStorageHASrcInfo> &follow
   common::ObMemberList member_list;
   GlobalLearnerList learner_list;
   int64_t full_replica_count = 0;
-  int64_t readonly_replica_count = 0;
+  int64_t non_paxos_replica_count = 0;
   if (OB_ISNULL(log_handler = ls_->get_log_handler())) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("log handler should not be NULL", K(ret));
@@ -1171,12 +1169,12 @@ int ObILSRestoreState::get_follower_server_(ObIArray<ObStorageHASrcInfo> &follow
     LOG_WARN("failed to get paxos member list and learner list", K(ret));
   } else if (OB_FAIL(location_service_->get(follower_info.cluster_id_, tenant_id, ls_->get_ls_id(), expire_renew_time, is_cache_hit, location))) {
     LOG_WARN("fail to get location", K(ret), KPC(ls_));
-  } else if (OB_FAIL(location.get_replica_count(full_replica_count, readonly_replica_count))) {
-    LOG_WARN("fail to get replica count in location", KR(ret), K(location), K(full_replica_count), K(readonly_replica_count));
-  } else if (full_replica_count != paxos_replica_num || readonly_replica_count != learner_list.get_member_number()) {
+  } else if (OB_FAIL(location.get_replica_count(full_replica_count, non_paxos_replica_count))) {
+    LOG_WARN("fail to get replica count in location", KR(ret), K(location), K(full_replica_count), K(non_paxos_replica_count));
+  } else if (full_replica_count != paxos_replica_num || non_paxos_replica_count != learner_list.get_member_number()) {
     ret = OB_REPLICA_NUM_NOT_MATCH;
     LOG_WARN("replica num not match, ls may in migration", K(ret), K(location), K(full_replica_count),
-             K(readonly_replica_count), K(member_list), K(paxos_replica_num), K(learner_list));
+             K(non_paxos_replica_count), K(member_list), K(paxos_replica_num), K(learner_list));
   } else {
     const ObIArray<share::ObLSReplicaLocation> &replica_locations = location.get_replica_locations();
     for (int64_t i = 0; OB_SUCC(ret) && i < replica_locations.count(); ++i) {
@@ -1397,18 +1395,24 @@ int ObILSRestoreState::schedule_tablet_group_restore_dag_net_(
   return ret;
 }
 
+ERRSIM_POINT_DEF(EN_SKIP_RESTORE_SYS_TABLETS_DAG_NET);
 int ObILSRestoreState::schedule_ls_restore_(
     const ObLSRestoreArg &arg,
     const share::ObTaskId &task_id)
 {
   int ret = OB_SUCCESS;
   bool reach_limit = false;
+
   if (!is_inited_) {
     ret = OB_NOT_INIT;
     LOG_WARN("LS restore state do not init", K(ret));
   } else if (!arg.is_valid() || task_id.is_invalid()) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("schedule ls restore get invalid argument", K(ret), K(arg), K(task_id));
+#ifdef ERRSIM
+  } else if (OB_SUCCESS != EN_SKIP_RESTORE_SYS_TABLETS_DAG_NET) {
+    LOG_ERROR("errsim EN_SKIP_RESTORE_SYS_TABLETS_DAG_NET");
+#endif
   } else if (OB_FAIL(check_restore_concurrency_limit_(reach_limit))) {
     LOG_WARN("failed to check restore concurrency limit", K(ret), K(arg), K(task_id));
   } else if (reach_limit) { // wait next schedule.
@@ -1984,14 +1988,10 @@ int ObLSRestoreSysTabletState::follower_fill_ls_restore_arg_(ObLSRestoreArg &arg
     LOG_WARN("fail to get location", K(ret), KPC(ls_));
   } else if (OB_FAIL(location.get_leader(leader))) {
     LOG_WARN("fail to get leader location", K(ret), K(location));
-  } else if (OB_FAIL(arg.src_.set_replica_type(leader.get_replica_type()))) {
-    LOG_WARN("fail to set src replica type", K(ret), K(leader));
-  } else if (OB_FAIL(arg.src_.set_member(ObMember(leader.get_server(), 0/*invalid timestamp is ok*/)))) {
-    LOG_WARN("fail to set src member", K(ret));
-  } else if (OB_FAIL(arg.dst_.set_replica_type(REPLICA_TYPE_FULL))) {
-    LOG_WARN("fail to set dst replica type", K(ret));
-  } else if (OB_FAIL(arg.dst_.set_member(ObMember(GCTX.self_addr(), 0/*invalid timestamp is ok*/)))) {
-    LOG_WARN("fail to set dst member", K(ret), "server", GCTX.self_addr());
+  } else if (OB_FAIL(arg.src_.init(leader.get_server(), 0/*invalid timestamp is ok*/, leader.get_replica_type()))) {
+    LOG_WARN("fail to init src_", K(ret), K(leader));
+  } else if (OB_FAIL(arg.dst_.init(GCTX.self_addr(), 0/*invalid timestamp is ok*/, REPLICA_TYPE_FULL))) {
+    LOG_WARN("fail to init dst_", K(ret), K(GCTX.self_addr()));
   } else if (OB_FAIL(arg.restore_base_info_.copy_from(*ls_restore_arg_))) {
     LOG_WARN("fail to fill restore base info from ls restore args", K(ret), KPC(ls_restore_arg_));
   }
@@ -2708,19 +2708,20 @@ int ObLSRestoreMajorState::do_restore_major_(
   ObTabletGroupRestoreArg arg;
   bool reach_dag_limit = false;
   bool is_new_election = false;
-  // No matter is leader or follower, always restore data from backup.
-  if (OB_FAIL(leader_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
-    LOG_WARN("fail to fill leader ls restore arg", K(ret));
-  }
+  const bool is_shared_storage_mode = GCTX.is_shared_storage_mode();
 
-#if 0
-  // TODO(wangxiaohui.wxh): 4.3, let leader restore from backup and follower restore from leader.
-  if (!is_follower(role_) && OB_FAIL(leader_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
-    LOG_WARN("fail to fill ls restore arg", K(ret));
-  } else if (is_follower(role_) && OB_FAIL(follower_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
-    LOG_WARN("fail to fill ls restore arg", K(ret));
+  if (!is_shared_storage_mode) {
+    // No matter is leader or follower, always restore data from backup.
+    if (OB_FAIL(leader_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
+      LOG_WARN("fail to fill leader ls restore arg", K(ret));
+    }
+  } else {
+    if (!is_follower(role_) && OB_FAIL(leader_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
+      LOG_WARN("fail to fill ls restore arg", K(ret));
+    } else if (is_follower(role_) && OB_FAIL(follower_fill_tablet_group_restore_arg_(tablet_need_restore.get_tablet_list(), tablet_need_restore.action(), arg))) {
+      LOG_WARN("fail to fill ls restore arg", K(ret));
+    }
   }
-#endif
 
   if (FAILEDx(check_new_election_(is_new_election))) {
     LOG_WARN("fail to check change role", K(ret));
@@ -3066,7 +3067,7 @@ bool ObLSRestoreResultMgr::can_retrieable_err(const int err) const
     case OB_NOT_SUPPORTED :
     case OB_TENANT_HAS_BEEN_DROPPED :
     case OB_SERVER_OUTOF_DISK_SPACE :
-    case OB_BACKUP_FILE_NOT_EXIST :
+    case OB_OBJECT_NOT_EXIST :
     case OB_ARCHIVE_ROUND_NOT_CONTINUOUS :
     case OB_HASH_NOT_EXIST:
     case OB_TOO_MANY_PARTITIONS_ERROR:
